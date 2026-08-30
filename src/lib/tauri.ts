@@ -3,6 +3,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AdaptiveLevelChangedPayload,
+  AdaptiveMode,
+  AdaptiveParams,
+  AdaptiveStateResetPayload,
+  AdaptiveStateSnapshot,
   AppConfig,
   ConfigResponse,
   DifficultyConfig,
@@ -311,8 +316,15 @@ export async function startRecording(): Promise<void> {
 
 import type { TestResult } from "@/types/result";
 
-export async function scoreFullTest(): Promise<TestResult> {
-  return invoke<TestResult>("score_full_test");
+/**
+ * 触发完整评分（1-14 本地 + 15-18 LLM + 19 STT+LLM）。
+ *
+ * `is_retest = true` 跳过自适应更新（用于「重新测试」按钮场景，前端 store 需在调用前
+ * 通过 `useResultStore.getState().setIsRetest(true)` 标记），同时 `TestResult.adaptive`
+ * 为 `null`，`TestResult.is_retest = true`，Result 页徽章显示「本次为重新测试，未调整能力」。
+ */
+export async function scoreFullTest(isRetest = false): Promise<TestResult> {
+  return invoke<TestResult>("score_full_test", { isRetest });
 }
 
 export async function stopRecording(outputPath: string): Promise<{ outputPath: string }> {
@@ -339,4 +351,63 @@ export async function onRecordStop(
   handler: () => void
 ): Promise<UnlistenFn> {
   return listen("test-record-stop", () => handler());
+}
+
+// ===== v1.1+ 自适应难度 =====
+
+/**
+ * 拉取当前 AdaptiveState 快照（前端 store 初始化用）。
+ */
+export async function getAdaptiveState(): Promise<AdaptiveStateSnapshot> {
+  return invoke<AdaptiveStateSnapshot>("get_adaptive_state");
+}
+
+/**
+ * UI「重置自适应状态」按钮：硬重置（归零 update_count），档位重置为 `manualLevel`。
+ */
+export async function resetAdaptiveState(
+  manualLevel: DifficultyLevel
+): Promise<AdaptiveStateSnapshot> {
+  return invoke<AdaptiveStateSnapshot>("reset_adaptive_state", { manualLevel });
+}
+
+/**
+ * 切换手动 / 自动档：
+ * - `auto = false`（auto → manual）：把 adaptive state 软重置到 `config.difficulty.level`（§11.4）
+ * - `auto = true`（manual → auto）：
+ *   - 传 `initialLevel` → 把 adaptive state 软重置到该档（用户主动选择起始档，update_count 保留）
+ *   - 不传 → 不动 adaptive state（保留之前的自动档状态，§11.6）
+ */
+export async function setAdaptiveMode(
+  auto: boolean,
+  initialLevel?: DifficultyLevel
+): Promise<AdaptiveStateSnapshot> {
+  return invoke<AdaptiveStateSnapshot>("set_adaptive_mode", {
+    auto,
+    initialLevel: initialLevel ?? null,
+  });
+}
+
+/**
+ * 落盘 15 个算法参数。ScoreFullTest 命令每次会从磁盘重新读取，
+ * 因此 UI 编辑后下一次评分立即生效，无需重启应用。
+ */
+export async function updateAdaptiveParams(params: AdaptiveParams): Promise<void> {
+  await invoke("update_adaptive_params", { params });
+}
+
+export async function onAdaptiveLevelChanged(
+  handler: (payload: AdaptiveLevelChangedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<AdaptiveLevelChangedPayload>("adaptive-level-changed", (e) =>
+    handler(e.payload)
+  );
+}
+
+export async function onAdaptiveStateReset(
+  handler: (payload: AdaptiveStateResetPayload) => void
+): Promise<UnlistenFn> {
+  return listen<AdaptiveStateResetPayload>("adaptive-state-reset", (e) =>
+    handler(e.payload)
+  );
 }

@@ -113,16 +113,21 @@ static Q15_18_BLANK_RE: Lazy<Regex> = Lazy::new(|| {
 // ===== 1-4 题 =====
 
 /// 生成 1-4 题：4 段短对话，每段配 1 题
+///
+/// `effective_level` 是「实际生效档」：手动档下等于 `config.difficulty.level`，
+/// 自动档下等于 `adaptive_state.current_level`（v1.1+）。
+/// 出题场景池（dialogue/monologue）的随机抽取与 `demand_*` 文字都按它走。
 pub async fn generate_q1_4(
     http_client: &reqwest::Client,
     llm_cfg: &ModelConfig,
     llm_params: &LlmParams,
     prompts: &PromptConfig,
     difficulty: &DifficultyConfig,
+    effective_level: &str,
 ) -> Result<Vec<ShortDialogue>, GenError> {
     let mut vars = HashMap::new();
-    inject_difficulty_vars(&mut vars, difficulty);
-    let dialogue_json = pick_dialogue_scenarios_json(&difficulty.level);
+    inject_difficulty_vars(&mut vars, difficulty, effective_level);
+    let dialogue_json = pick_dialogue_scenarios_json(effective_level);
     vars.insert("DIALOGUE_SCENARIOS", &dialogue_json);
     let prompt = render(&prompts.q1_4, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
@@ -154,19 +159,20 @@ pub async fn generate_q1_4(
 
 /// 生成 5-14 题：4 段长对话 + 1 段独白
 ///
-/// 返回 (long_dialogues, monologue)
+/// 返回 (long_dialogues, monologue)。`effective_level` 语义见 `generate_q1_4`。
 pub async fn generate_q5_14(
     http_client: &reqwest::Client,
     llm_cfg: &ModelConfig,
     llm_params: &LlmParams,
     prompts: &PromptConfig,
     difficulty: &DifficultyConfig,
+    effective_level: &str,
 ) -> Result<(Vec<LongDialogue>, Monologue), GenError> {
     let mut vars = HashMap::new();
-    inject_difficulty_vars(&mut vars, difficulty);
-    let dialogue_json = pick_dialogue_scenarios_json(&difficulty.level);
+    inject_difficulty_vars(&mut vars, difficulty, effective_level);
+    let dialogue_json = pick_dialogue_scenarios_json(effective_level);
     vars.insert("DIALOGUE_SCENARIOS", &dialogue_json);
-    let monologue_json = pick_monologue_scenario_json(&difficulty.level);
+    let monologue_json = pick_monologue_scenario_json(effective_level);
     vars.insert("MONOLOGUE_SCENARIO", &monologue_json);
     let prompt = render(&prompts.q5_14, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
@@ -199,16 +205,19 @@ pub async fn generate_q5_14(
 // ===== 15-18 题 =====
 
 /// 生成 15-19 题听力材料与挖空表格
+///
+/// `effective_level` 语义见 `generate_q1_4`。
 pub async fn generate_q15_18(
     http_client: &reqwest::Client,
     llm_cfg: &ModelConfig,
     llm_params: &LlmParams,
     prompts: &PromptConfig,
     difficulty: &DifficultyConfig,
+    effective_level: &str,
 ) -> Result<RetellMaterial, GenError> {
     let mut vars = HashMap::new();
-    inject_difficulty_vars(&mut vars, difficulty);
-    let monologue_json = pick_monologue_scenario_json(&difficulty.level);
+    inject_difficulty_vars(&mut vars, difficulty, effective_level);
+    let monologue_json = pick_monologue_scenario_json(effective_level);
     vars.insert("MONOLOGUE_SCENARIO", &monologue_json);
     let prompt = render(&prompts.q15_18, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
@@ -238,13 +247,18 @@ pub async fn generate_q15_18(
 
 // ===== 内部辅助 =====
 
-/// 根据 `difficulty.level` 选择当前激活档的文字，三个 prompt 占位符同时注入
+/// 根据 `level`（手动档 = config.difficulty.level；自动档 = adaptive_state.current_level）
+/// 选择当前激活档的文字，三个 prompt 占位符同时注入。
 ///
 /// 即使某些 prompt 只用到其中一个 demand_*，三个 key 都注入也不影响渲染
 /// （`render` 函数会忽略 vars 中未被模板引用的 key）。
 /// 未知 level 或缺字段时兜底到 `junior_high`，避免运行时 panic。
-fn inject_difficulty_vars<'a>(vars: &mut HashMap<&'a str, &'a str>, difficulty: &'a DifficultyConfig) {
-    let demand: &DifficultyDemand = match difficulty.level.as_str() {
+fn inject_difficulty_vars<'a>(
+    vars: &mut HashMap<&'a str, &'a str>,
+    difficulty: &'a DifficultyConfig,
+    level: &'a str,
+) {
+    let demand: &DifficultyDemand = match level {
         "senior_high" => &difficulty.senior_high,
         "undergraduate" => &difficulty.undergraduate,
         _ => &difficulty.junior_high,
@@ -674,6 +688,7 @@ impl ShortDialogueRaw {
 pub async fn generate_all_for_test(
     http_client: &reqwest::Client,
     config: &AppConfig,
+    effective_level: &str,
 ) -> Result<
     (
         Vec<ShortDialogue>,
@@ -690,6 +705,7 @@ pub async fn generate_all_for_test(
         &config.llm_params,
         &config.prompts,
         &config.difficulty,
+        effective_level,
     )
     .await?;
 
@@ -700,6 +716,7 @@ pub async fn generate_all_for_test(
         &config.llm_params,
         &config.prompts,
         &config.difficulty,
+        effective_level,
     )
     .await?;
 
@@ -710,6 +727,7 @@ pub async fn generate_all_for_test(
         &config.llm_params,
         &config.prompts,
         &config.difficulty,
+        effective_level,
     )
     .await?;
 

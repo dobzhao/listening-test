@@ -7,12 +7,16 @@ pub mod models;
 pub mod services;
 pub mod utils;
 
+use commands::adaptive::AdaptiveStateHandle;
 use commands::audio::AudioPlaybackState;
 use commands::config::ConfigState;
 use commands::recorder::RecorderGlobal;
 use commands::test_flow::FlowGlobal;
 use commands::test_session::SessionState;
 use std::io;
+use std::sync::Arc;
+use tauri::Manager;
+use tokio::sync::RwLock;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -72,6 +76,25 @@ pub fn run() {
         .manage(FlowGlobal::default())
         .manage(RecorderGlobal::default())
         .manage(AudioPlaybackState::default())
+        .setup(|app| {
+            // v1.1+ 自适应状态启动加载：从 adaptive_state.json 读取（含损坏恢复），
+            // 再注入 AdaptiveStateHandle，替代 Default 占位的 junior_high。
+            let handle = app.handle();
+            let loaded_state = services::adaptive::load_state_from_disk(handle);
+            tracing::info!(
+                ability = loaded_state.ability_score,
+                trend = loaded_state.trend,
+                level = loaded_state.current_level.as_str(),
+                update_count = loaded_state.update_count,
+                "自适应状态启动加载完成"
+            );
+            app.manage(AdaptiveStateHandle(Arc::new(RwLock::new(loaded_state))));
+
+            // 同步加载 adaptive_params.json（仅日志，不放内存：score 命令每次从磁盘读，确保 UI 编辑后立即生效）
+            let _ = services::adaptive::load_params_from_disk(handle);
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // 配置
             commands::config::get_config,
@@ -114,6 +137,11 @@ pub fn run() {
             commands::recorder::get_audio_level,
             // 评分
             commands::scoring::score_full_test,
+            // v1.1+ 自适应难度
+            commands::adaptive::get_adaptive_state,
+            commands::adaptive::reset_adaptive_state,
+            commands::adaptive::set_adaptive_mode,
+            commands::adaptive::update_adaptive_params,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

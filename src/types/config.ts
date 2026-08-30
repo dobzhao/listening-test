@@ -64,14 +64,73 @@ export type DifficultyLevel = "junior_high" | "senior_high" | "undergraduate";
 export type DifficultyDemandKey = "demand_1_4" | "demand_5_14" | "demand_15_18";
 
 /**
- * 难度配置：当前选中档 + 三档文字。
+ * 难度配置：当前选中档 + 三档文字 + 自适应模式（v1.1+）。
  * 与 Rust `models::config::DifficultyConfig` 字段一一对应。
  */
 export interface DifficultyConfig {
+  /** 自适应模式：`"manual"`（默认）/ `"auto"` */
+  mode: AdaptiveMode;
+  /** 手动档（mode = manual 时生效；mode = auto 时记录上次手动选择） */
   level: DifficultyLevel;
   junior_high: DifficultyDemand;
   senior_high: DifficultyDemand;
   undergraduate: DifficultyDemand;
+}
+
+/**
+ * 自适应难度（v1.1+）
+ *
+ * - `mode`：`"auto"` 时使用 `adaptive_state.current_level` 出题，
+ *   `"manual"` 时使用 `config.difficulty.level`
+ * - `state`：`adaptive_state.json` 持久化的运行时态
+ * - `params`：15 个算法参数（前端可编辑，落盘到 `adaptive_params.json`）
+ */
+export type AdaptiveMode = "auto" | "manual";
+
+export interface AdaptiveStateSnapshot {
+  ability_score: number;
+  trend: number;
+  current_level: DifficultyLevel;
+  update_count: number;
+}
+
+export interface AdaptiveLevelChangedPayload {
+  from: DifficultyLevel;
+  to: DifficultyLevel;
+  ability: number;
+  trend: number;
+  update_count: number;
+}
+
+export interface AdaptiveStateResetPayload {
+  new_level: DifficultyLevel;
+  ability: number;
+  trend: number;
+  update_count: number;
+  /** UI 据此弹 toast：`auto → manual` 时弹「已切换到手动档，已重置自适应变量」 */
+  new_mode: AdaptiveMode;
+}
+
+/**
+ * 15 个算法参数（与 Rust `adaptive_difficulty::Params` 字段一一对应）。
+ * 前端字段名沿用 snake_case 以便与后端 `serde::Deserialize` 直读。
+ */
+export interface AdaptiveParams {
+  weight_a: number;
+  weight_b: number;
+  weight_c: number;
+  score_floor: number;
+  alpha: number;
+  base_magnitude: number;
+  k: number;
+  max_magnitude: number;
+  b1: number;
+  b2: number;
+  buffer: number;
+  ability_min: number;
+  ability_max: number;
+  trend_min: number;
+  trend_max: number;
 }
 
 export const DIFFICULTY_LEVELS: DifficultyLevel[] = [
@@ -225,6 +284,7 @@ export function defaultAppConfig(): AppConfig {
  */
 export function defaultDifficultyConfig(): DifficultyConfig {
   return {
+    mode: "manual",
     level: "junior_high",
     junior_high: {
       demand_1_4:
@@ -250,5 +310,28 @@ export function defaultDifficultyConfig(): DifficultyConfig {
       demand_15_18:
         "独白平均句长控制在16个单词左右，独白可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。",
     },
+  };
+}
+
+/**
+ * 15 个算法参数默认值（与 Rust `adaptive_difficulty::Params::default()` 一字一致）。
+ */
+export function defaultAdaptiveParams(): AdaptiveParams {
+  return {
+    weight_a: 0.5,
+    weight_b: 0.2,
+    weight_c: 0.3,
+    score_floor: 0.6,
+    alpha: 0.4,
+    base_magnitude: 3.0,
+    k: 10.0,
+    max_magnitude: 8.0,
+    b1: 200.0,
+    b2: 400.0,
+    buffer: 20.0,
+    ability_min: 0.0,
+    ability_max: 600.0,
+    trend_min: -1.0,
+    trend_max: 1.0,
   };
 }

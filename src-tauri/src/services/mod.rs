@@ -3,6 +3,7 @@
 //! 把 LLM/TTS/STT 调用、音频处理、Prompt 渲染、题目生成、测试流程等通用逻辑
 //! 封装在 services，Tauri commands 只负责参数解析与权限/事件发射。
 
+pub mod adaptive;
 pub mod audio_pipeline;
 pub mod audio_player;
 pub mod audio_processor;

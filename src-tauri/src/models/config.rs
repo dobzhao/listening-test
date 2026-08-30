@@ -295,12 +295,17 @@ impl Default for DifficultyDemand {
     }
 }
 
-/// 难度配置：当前选中档 + 三档文字
+/// 难度配置：当前选中档 + 三档文字 + 自适应模式（v1.1+）
 ///
-/// `level` 取值 `"junior_high" | "senior_high" | "undergraduate"`。
-/// 出题时根据 `level` 选择对应档位的 `demand_*` 文字注入 prompt。
+/// `level` 取值 `"junior_high" | "senior_high" | "undergraduate"`，
+/// 表示「手动档」；`mode = "auto"` 时由自适应算法决定实际出题档。
+/// 出题时按 `effective_level(state, mode, level)` 解析后注入对应 `demand_*` 文字。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DifficultyConfig {
+    /// 自适应模式开关：`"manual"`（默认，使用 `level`）/ `"auto"`（使用自适应 state.current_level）
+    #[serde(default = "default_difficulty_mode")]
+    pub mode: String,
+    /// 手动档（mode = "manual" 时生效；mode = "auto" 时仍记录上次手动选择，auto→manual 重置会用到）
     #[serde(default = "default_difficulty_level")]
     pub level: String,
     #[serde(default)]
@@ -315,10 +320,15 @@ fn default_difficulty_level() -> String {
     "junior_high".to_string()
 }
 
+fn default_difficulty_mode() -> String {
+    "manual".to_string()
+}
+
 impl Default for DifficultyConfig {
     fn default() -> Self {
         let defaults = default_difficulty_demands();
         Self {
+            mode: default_difficulty_mode(),
             level: default_difficulty_level(),
             junior_high: defaults.junior_high,
             senior_high: defaults.senior_high,
@@ -332,6 +342,7 @@ impl Default for DifficultyConfig {
 /// 文字体量小、不含占位符、不需多语言，直接硬编码而非 `include_str!`。
 pub fn default_difficulty_demands() -> DifficultyConfig {
     DifficultyConfig {
+        mode: default_difficulty_mode(),
         level: default_difficulty_level(),
         junior_high: DifficultyDemand {
             demand_1_4: "对话时M和W每人最多说两次话，对话时不要使用从句和虚拟语气，只能使用简单句。"

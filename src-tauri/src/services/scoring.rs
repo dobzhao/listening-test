@@ -3,10 +3,13 @@
 //! - 1-14 题（MCQ）：本地比对 user_answer vs correct_answer
 //! - 15-18 题（填空）：调用 LLM，按 `q15_18_scoring` Prompt 评分
 //! - 19 题（口头转述）：先调 STT 转写录音，再调 LLM 按 `q19_scoring` Prompt 评分
+//! - 评分完成后（除「重新测试」外）调用 `adaptive_difficulty::update` 更新自适应能力分与档位（v1.1+）
 
+use adaptive_difficulty::{AdaptiveState, Params};
 use crate::models::config::{AppConfig, LlmParams, ModelConfig, PromptConfig};
 use crate::models::question::TestSession;
 use crate::models::result::{BlankResult, McqResult, RetellResult, TestResult};
+use crate::services::adaptive as adaptive_svc;
 use crate::services::http_client::build_client;
 use crate::services::llm_service::{call_llm_with_feedback, ChatMessage, LlmError, truncate_for_feedback};
 use crate::services::prompt_engine_service::render;
@@ -15,6 +18,7 @@ use crate::utils::json_extract::try_parse;
 use crate::utils::retry::RetryConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -359,7 +363,33 @@ struct RetellScore {
     comment: String,
 }
 
+/// 自适应档位变化事件 payload（前端 listen 用）
+///
+/// 实际语义：每次**成功的非 retest 更新**后都会发射，**不仅限于档位翻转**。
+/// payload 已携带完整新状态（ability/trend/update_count/current_level），
+/// 前端 `useAdaptiveStore` 直接 setState 全量同步；前端 UI
+/// （如 `AdaptiveSummaryCard`）要判断「档位是否真的翻转」时，
+/// 应通过 `score_full_test` 返回的 `TestResult.adaptive.level_before/level_after`
+/// 字段判定，**不要**依赖事件名。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveLevelChangedPayload {
+    pub from: String,
+    pub to: String,
+    pub ability: f64,
+    pub trend: f64,
+    pub update_count: u64,
+}
+
+pub const ADAPTIVE_LEVEL_CHANGED_EVENT: &str = "adaptive-level-changed";
+
 /// 完整评分入口
+///
+/// `is_retest = true` 时跳过自适应更新（用于「重新测试」按钮触发的二次评分）；
+/// `adaptive_state` 在 `is_retest = false` 时会被原地修改为新档位（成功路径）。
+/// 自适应事件 `adaptive-level-changed` 在每次**成功更新**（不论档位是否翻转）
+/// 后通过 `app` 发射，让前端 store 同步最新 ability / trend / update_count，
+/// 解决「得分没跨过阈值时设置界面仍显示旧值」的问题。
+#[allow(clippy::too_many_arguments)]
 pub async fn score_full_test(
     config: &AppConfig,
     session: &TestSession,
@@ -367,6 +397,10 @@ pub async fn score_full_test(
     correct_answers: &HashMap<u32, String>,
     mcq_question_ids: &[u32],
     recording_path: Option<&str>,
+    adaptive_state: &mut AdaptiveState,
+    adaptive_params: &Params,
+    is_retest: bool,
+    app: Option<&AppHandle>,
 ) -> Result<TestResult, ScoringError> {
     // 1. 1-14 题本地评分
     let mcq_results = score_mcq(user_answers, correct_answers, mcq_question_ids);
@@ -428,6 +462,48 @@ pub async fn score_full_test(
     let correct_count = mcq_results.iter().filter(|r| r.is_correct).count();
     let total_score = correct_count as f32 + blank_total + retell_result.score;
 
+    // 6. v1.1+ 自适应难度更新（仅当非 retest）
+    let adaptive = if is_retest {
+        None
+    } else {
+        let (a, b, c) = adaptive_svc::compute_score_rates(
+            correct_count,
+            blank_total,
+            retell_result.score,
+        );
+        let before = adaptive_state.clone();
+        let update_result = adaptive_difficulty::update(adaptive_state, adaptive_params, a, b, c);
+        match update_result {
+            Ok(trace) => {
+                let after = adaptive_state.clone();
+                // 每次成功的非 retest 更新都发射事件，**不论档位是否翻转**。
+                // 原实现仅在 level_before != level_after 时发射，导致「得分未跨过阈值」
+                // 时前端 store 不更新，设置界面（DifficultyPanel）仍显示旧的
+                // ability / trend / update_count。payload 已携带完整新状态，
+                // 前端 useAdaptiveStore 直接 setState 全量同步即可。
+                // UI 是否高亮「档位变化」应通过 TestResult.adaptive 字段判断，
+                // 不应依赖事件是否触发。
+                if let Some(app) = app {
+                    let payload = AdaptiveLevelChangedPayload {
+                        from: trace.level_before.as_str().to_string(),
+                        to: trace.level_after.as_str().to_string(),
+                        ability: trace.ability_after,
+                        trend: trace.trend_after,
+                        update_count: after.update_count,
+                    };
+                    if let Err(e) = app.emit(ADAPTIVE_LEVEL_CHANGED_EVENT, &payload) {
+                        warn!(error = %e, "adaptive-level-changed 事件发送失败");
+                    }
+                }
+                Some(adaptive_svc::build_summary(&before, &after, &trace))
+            }
+            Err(e) => {
+                warn!(error = %e, "adaptive_difficulty::update 失败，state 保持不变");
+                None
+            }
+        }
+    };
+
     Ok(TestResult {
         session_id: session.session_id.clone(),
         mcq_results,
@@ -437,6 +513,8 @@ pub async fn score_full_test(
         total_score,
         max_score: 14.0 + 6.0 + 10.0,
         dialogue_texts,
+        adaptive,
+        is_retest,
     })
 }
 

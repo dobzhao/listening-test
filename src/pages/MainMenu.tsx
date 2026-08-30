@@ -14,8 +14,10 @@ import { Separator } from "@/components/ui/separator";
 import { Play, Settings as SettingsIcon, Headphones, Loader2, RefreshCw } from "lucide-react";
 import { useSettingsStore } from "@/store/settings";
 import { useTestStore, STAGE_LABELS } from "@/store/test";
+import { useAdaptiveStore } from "@/store/adaptive";
 import { useGenerationProgress } from "@/hooks/useGenerationProgress";
 import { confirm } from "@/store/confirm";
+import { DIFFICULTY_LEVEL_LABELS } from "@/types/config";
 
 export default function MainMenu() {
   const navigate = useNavigate();
@@ -32,6 +34,12 @@ export default function MainMenu() {
   const start = useTestStore((s) => s.start);
   const loadSession = useTestStore((s) => s.load);
   const resetSession = useTestStore((s) => s.reset);
+
+  const adaptiveMode = useAdaptiveStore((s) => s.mode);
+  const adaptiveState = useAdaptiveStore();
+  const manualLevel = useSettingsStore((s) => s.config.difficulty.level);
+  const effectiveLevel =
+    adaptiveMode === "auto" ? adaptiveState.currentLevel : manualLevel;
 
   useGenerationProgress();
 
@@ -123,6 +131,15 @@ export default function MainMenu() {
                     label="STT（语音识别）"
                     configured={sttConfigured}
                     detail={`${stt.host}:${stt.port} · ${stt.model || "<未设置>"}`}
+                  />
+                  <ConfigStatusRow
+                    label="难度模式"
+                    configured={true}
+                    detail={
+                      adaptiveMode === "auto"
+                        ? `自动 | 当前档：${DIFFICULTY_LEVEL_LABELS[effectiveLevel]}`
+                        : `手动 | 当前档：${DIFFICULTY_LEVEL_LABELS[effectiveLevel]}`
+                    }
                   />
                 </div>
 

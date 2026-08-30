@@ -2,6 +2,7 @@
 //!
 //! 前端通过 `invoke('command_name', args)` 调用这里的函数。
 
+pub mod adaptive;
 pub mod audio;
 pub mod config;
 pub mod device;

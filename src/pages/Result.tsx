@@ -20,17 +20,23 @@ import {
   RefreshCw,
   Home,
   AlertCircle,
+  ArrowUp,
+  ArrowDown,
+  ArrowRight,
 } from "lucide-react";
 import { useResultStore } from "@/store/result";
 import { useTestStore } from "@/store/test";
 import { useTestFlowStore } from "@/store/testFlow";
+import { useAdaptiveStore } from "@/store/adaptive";
 import { confirm } from "@/store/confirm";
 import {
   resetTestFlow,
   clearTestSession,
   startTestFlow,
 } from "@/lib/tauri";
-import type { McqResult, BlankResult, RetellResult } from "@/types/result";
+import type { McqResult, BlankResult, RetellResult, AdaptiveSummary } from "@/types/result";
+import { DIFFICULTY_LEVEL_LABELS } from "@/types/config";
+import { AbilityProgressBar } from "@/components/AbilityProgressBar";
 
 export default function ResultPage() {
   const navigate = useNavigate();
@@ -52,9 +58,14 @@ export default function ResultPage() {
   // 后续该 useEffect 见到 result 已非 null 不再触发，最终结算页显示的是这次空答案的 0 分。
   // 先导航让 ResultPage 卸载，再 reset 状态，useEffect 就不会在旧页面上重跑。
   const handleRetest = async () => {
+    // 自动档下提示用户：重复做同一套题不会再更新能力分（v1.1+）
+    const adaptiveMode = useAdaptiveStore.getState().mode;
+    const retestHint = adaptiveMode === "auto"
+      ? "\n\n提示：已启用「自动切换难度」，重复做同一套题不会更新难度分。"
+      : "";
     if (
       !(await confirm(
-        "确认清空之前的答题记录并重新作答？\n将清空 1-14 题选项、15-18 题填空与第 19 题录音，但保留题目。"
+        "确认清空之前的答题记录并重新作答？\n将清空 1-14 题选项、15-18 题填空与第 19 题录音，但保留题目。" + retestHint
       ))
     ) {
       console.log("[Result] handleRetest: 用户取消");
@@ -65,6 +76,13 @@ export default function ResultPage() {
     console.log(
       `[Result] handleRetest: 用户确认重新测试 session_id=${sessionId}, 清空 ${clearedAnswers} 条前端作答`
     );
+    // 0. v1.1+ 标记「重新测试」：下一次评分会跳过自适应更新。
+    //    该 flag 必须在 resetResult() 之前设置并跨越整个 retest 流程保留，
+    //    直到下一次 Result 页挂载时 load() 把它传给 scoreFullTest(isRetest)。
+    //    注意：store/result.ts::reset() 不会清此 flag（避免误清），
+    //    真正的清理由 handleBackToMenu 显式调用 setIsRetest(false) 完成。
+    useResultStore.getState().setIsRetest(true);
+
     // 1. 先导航，让 ResultPage 卸载（避免 useEffect 重跑评分）
     navigate("/test");
     // 2. 后端：清空流程状态（answers、finished、skip / recording 标志等）
@@ -120,6 +138,10 @@ export default function ResultPage() {
     }
     // 3. 前端：清空三个 store
     resetResult();
+    // 显式清掉 isRetest：用户放弃 retest 回到主菜单后，下次从 MainMenu 重新
+    // 开始测试时不应残留 retest flag（否则下一次评分会被错误地跳过自适应更新）。
+    // reset() 中有意不清此 flag，理由见 store/result.ts 与 handleRetest 的注释。
+    useResultStore.getState().setIsRetest(false);
     useTestFlowStore.getState().reset();
     resetSession();
     console.log("[Result] handleBackToMenu: 前端 store 已重置");
@@ -211,7 +233,13 @@ export default function ResultPage() {
         {/* 总分卡片 */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">总分</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg">总分</CardTitle>
+              <AbilityDeltaBadge
+                isRetest={result.is_retest}
+                adaptive={result.adaptive}
+              />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="flex items-baseline gap-2">
@@ -243,6 +271,9 @@ export default function ResultPage() {
           </CardContent>
         </Card>
 
+        {/* 自适应难度调整摘要（v1.1+）：仅在非 retest 且后端成功更新时渲染 */}
+        {result.adaptive && <AdaptiveSummaryCard summary={result.adaptive} />}
+
         {/* 1-14 题逐题对错 */}
         <McqSection results={result.mcq_results} dialogueTexts={result.dialogue_texts} />
 
@@ -256,6 +287,147 @@ export default function ResultPage() {
   );
 }
 
+// ===== 自适应（v1.1+）辅助组件 =====
+
+/**
+ * 总分卡片右上角的能力分变化徽章：
+ * - is_retest=true → secondary「本次为重新测试，未调整能力」
+ * - delta > 0 → 绿色 ↑ +X.X
+ * - delta < 0 → 红色 ↓ -X.X
+ * - delta ≈ 0 → 灰色 → 0.0
+ */
+function AbilityDeltaBadge({
+  isRetest,
+  adaptive,
+}: {
+  isRetest: boolean;
+  adaptive: AdaptiveSummary | null;
+}) {
+  if (isRetest) {
+    return (
+      <Badge variant="secondary" className="text-xs">
+        本次为重新测试，未调整能力
+      </Badge>
+    );
+  }
+  if (!adaptive) {
+    return null;
+  }
+  const delta = adaptive.ability_after - adaptive.ability_before;
+  const abs = Math.abs(delta);
+  const formatted = abs.toFixed(1);
+  if (delta > 1e-9) {
+    return (
+      <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100 text-xs">
+        <ArrowUp className="w-3 h-3 mr-1" />
+        +{formatted}
+      </Badge>
+    );
+  }
+  if (delta < -1e-9) {
+    return (
+      <Badge className="bg-rose-100 text-rose-700 border-rose-200 hover:bg-rose-100 text-xs">
+        <ArrowDown className="w-3 h-3 mr-1" />
+        -{formatted}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-xs text-muted-foreground">
+      <ArrowRight className="w-3 h-3 mr-1" />
+      0.0
+    </Badge>
+  );
+}
+
+/**
+ * 自适应难度调整卡片（v1.1+）：
+ * - 顶部：旧档 → 新档 + ⬆/⬇/→ 箭头；档位变化时 Card 加 `border-primary` 高亮
+ * - 进度条：可视化能力分前后位置；下方按当前档显示升级/降级距离
+ * - 三行只读：ability_score 变化量、trend、update_count
+ * - 可折叠 `<details>`（默认折叠）：trace.combined、ability_before/after、level_before/after、全 JSON
+ */
+function AdaptiveSummaryCard({ summary }: { summary: AdaptiveSummary }) {
+  const levelChanged = summary.level_before !== summary.level_after;
+  const promoted = levelChanged && levelOrdinal(summary.level_after) > levelOrdinal(summary.level_before);
+  const LevelArrow = !levelChanged ? ArrowRight : promoted ? ArrowUp : ArrowDown;
+  const arrowClass = !levelChanged
+    ? "text-muted-foreground"
+    : promoted
+      ? "text-emerald-600"
+      : "text-rose-600";
+  const delta = summary.ability_after - summary.ability_before;
+  const adaptiveParams = useAdaptiveStore((s) => s.params);
+
+  return (
+    <Card className={levelChanged ? "border-primary" : undefined}>
+      <CardHeader>
+        <CardTitle className="text-lg">自适应难度调整</CardTitle>
+        <CardDescription>
+          本次评分对能力分与档位的更新（v1.1+）
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-2 text-base">
+          <span className="font-medium">
+            {DIFFICULTY_LEVEL_LABELS[summary.level_before]}
+          </span>
+          <LevelArrow className={`w-4 h-4 ${arrowClass}`} />
+          <span className="font-medium">
+            {DIFFICULTY_LEVEL_LABELS[summary.level_after]}
+          </span>
+          <Badge
+            variant={levelChanged ? "default" : "outline"}
+            className="ml-2 text-xs"
+          >
+            {levelChanged ? "档位变化" : "档位不变"}
+          </Badge>
+        </div>
+
+        {/* 能力值进度条（含前后位置标记） */}
+        <div className="rounded-md border bg-muted/20 p-4">
+          <AbilityProgressBar
+            ability={summary.ability_after}
+            currentLevel={summary.level_after}
+            params={adaptiveParams}
+            abilityBefore={summary.ability_before}
+          />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
+            <span className="inline-block w-2.5 h-0.5 bg-slate-400 align-middle" />
+            <span>调整前：{summary.ability_before.toFixed(1)}</span>
+            <span className={`font-mono font-semibold ml-auto ${
+              delta > 1e-9 ? "text-emerald-700" : delta < -1e-9 ? "text-rose-700" : "text-muted-foreground"
+            }`}>
+              {delta > 1e-9 ? "+" : ""}
+              {delta.toFixed(1)}
+            </span>
+          </div>
+        </div>
+
+        <Separator />
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <SummaryItem
+            label="趋势"
+            value={`${summary.trend_after.toFixed(2)}`}
+          />
+          <SummaryItem
+            label="更新次数"
+            value={`${summary.update_count_after}`}
+          />
+        </div>
+        <details className="text-sm">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            展开详细 trace
+          </summary>
+          <pre className="mt-2 text-xs leading-relaxed p-3 bg-muted/30 rounded overflow-x-auto">
+            {JSON.stringify(summary.trace, null, 2)}
+          </pre>
+        </details>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -263,6 +435,18 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
       <p className="font-mono font-medium">{value}</p>
     </div>
   );
+}
+
+/** 难度档的相对顺序：junior_high < senior_high < undergraduate */
+function levelOrdinal(level: "junior_high" | "senior_high" | "undergraduate"): number {
+  switch (level) {
+    case "junior_high":
+      return 0;
+    case "senior_high":
+      return 1;
+    case "undergraduate":
+      return 2;
+  }
 }
 
 // === 1-14 题 ===

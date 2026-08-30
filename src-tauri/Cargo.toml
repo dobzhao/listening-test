@@ -5,6 +5,11 @@ description = "跨平台英语听力练习程序"
 authors = ["peiyuan"]
 edition = "2021"
 
+# Workspace 根：包含主程序 + adaptive_difficulty 子 crate（v1.1+）
+[workspace]
+members = [".", "adaptive_difficulty"]
+resolver = "2"
+
 # Rust edition 与 crate-type 配置
 [lib]
 name = "peiyuan_lib"
@@ -17,6 +22,9 @@ tauri-build = { version = "2", features = [] }
 # Tauri 2.0 核心
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-store = "2"
+
+# 自适应难度算法 crate（v1.1+）
+adaptive_difficulty = { path = "adaptive_difficulty" }
 
 # 异步运行时
 tokio = { version = "1", features = ["full"] }

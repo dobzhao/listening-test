@@ -4,7 +4,7 @@ use crate::models::config::{
     default_difficulty_demands, default_prompts, AppConfig, DifficultyConfig, DifficultyDemand,
     TimingConfig,
 };
-use crate::utils::path::config_file;
+use crate::utils::path::{atomic_write_json, config_file};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::RwLock;
@@ -31,9 +31,7 @@ fn load_config_from_disk(app: &AppHandle) -> Result<AppConfig, String> {
     let path = config_file(app)?;
     if !path.exists() {
         let defaults = AppConfig::default();
-        let serialized = serde_json::to_string_pretty(&defaults)
-            .map_err(|e| format!("序列化默认配置失败: {e}"))?;
-        fs::write(&path, serialized).map_err(|e| format!("写入默认配置失败: {e}"))?;
+        atomic_write_json(&path, &defaults).map_err(|e| format!("写入默认配置失败: {e}"))?;
         return Ok(defaults);
     }
     let text = fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
@@ -42,12 +40,10 @@ fn load_config_from_disk(app: &AppHandle) -> Result<AppConfig, String> {
     Ok(cfg)
 }
 
-/// 写入本地配置文件
-fn save_config_to_disk(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
+/// 写入本地配置文件（走原子写，崩溃时不会留下半截 JSON）
+pub(crate) fn save_config_to_disk(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     let path = config_file(app)?;
-    let serialized = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("序列化配置失败: {e}"))?;
-    fs::write(&path, serialized).map_err(|e| format!("写入配置失败: {e}"))?;
+    atomic_write_json(&path, config).map_err(|e| format!("写入配置失败: {e}"))?;
     Ok(())
 }
 

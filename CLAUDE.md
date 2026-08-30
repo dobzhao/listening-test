@@ -198,7 +198,7 @@ peiyuan/
 | `test-audio-play` | `{path, loop}` | 通知前端播放（实际播放由后端 rodio 完成）。**两次 PLAYING 之间的静音间隔会以 `{ path: null }` 发射一次**，前端需据此重置进度 |
 | `test-record-start` | `{durationMs}` | 进入 19 题录音阶段 |
 | `test-record-stop` | - | 录音结束 |
-| `adaptive-level-changed` | `{from: String, to: String, ability: f64, trend: f64, update_count: u64}` | 自适应算法升级/降档后立即发射，前端用于结算页高亮与难度 Tab 同步刷新 |
+| `adaptive-level-changed` | `{from: String, to: String, ability: f64, trend: f64, update_count: u64}` | **每次成功的非 retest 自适应更新后**发射（不论档位是否翻转），前端用于设置界面（DifficultyPanel）同步刷新 ability / trend / update_count。**判断档位是否真正翻转**应通过 `score_full_test` 返回的 `TestResult.adaptive.level_before/level_after`，不要依赖事件名 |
 | `adaptive-state-reset` | `{new_level: String, ability: f64, trend: f64}` | 用户点击「重置自适应状态」后发射 |
 | `test-score-progress` | `{stage, message}`（`stage ∈ {"mcq","blanks","retell","done"}`） | **已定义但当前未发射**（详见 §六） |
 
@@ -256,9 +256,9 @@ cpal::Stream 标记为 `!Send + !Sync`，无法在 Tauri State 中直接保存�
   drop(guard);
 
   persist_adaptive_state(&app, &guard)?;                   // tempfile + rename 原子写
-  if trace.level_before != trace.level_after {
-      app.emit("adaptive-level-changed", AdaptiveLevelChangedPayload::from(&trace))?;
-  }
+  // 每次成功更新都发射事件（不论档位是否翻转），让前端 store 同步最新
+  // ability / trend / update_count，避免设置界面显示陈旧值。
+  app.emit("adaptive-level-changed", AdaptiveLevelChangedPayload::from(&trace))?;
   result.adaptive = Some(AdaptiveSummary::from(&trace));   // 加到 TestResult
   Ok(result)
   ```
@@ -280,9 +280,14 @@ cpal::Stream 标记为 `!Send + !Sync`，无法在 Tauri State 中直接保存�
   - 运行时态：`{app_data_dir}/adaptive_state.json`，结构 `{ "ability_score": f64, "trend": f64, "current_level": String, "update_count": u64 }`，使用 `tempfile + rename` 原子写
   - 配置项：`config.json::difficulty.mode = "auto" | "manual"`（默认 `"manual"`），与现有 `DifficultyConfig` 同级，`#[serde(default)]` 回退
 - **启动加载**：`lib.rs` Builder `setup` 中读 `adaptive_state.json` → `validate_loaded`；校验失败 → `reset_to(JuniorHigh)`；同时把 state 注入 Tauri State
-- **重置按钮**：`commands/adaptive.rs::reset_adaptive_state` 调用 `adaptive_difficulty::reset_to(&mut state, level)`，其中 `level` 来源：
+- **重置按钮**：`commands/adaptive.rs::reset_adaptive_state` 调用 `adaptive_svc::hard_reset_to(&mut state, level)`
+  （等价于 `adaptive_difficulty::reset_to` + 额外把 `update_count` 归零），其中 `level` 来源：
   - 若当前 mode = Manual → 使用 `config.difficulty.level`（手动档值）
   - 若当前 mode = Auto   → 强制 `JuniorHigh`（避免破坏自动档语义）
+- **关闭自动档副作用**：`commands/adaptive.rs::set_adaptive_mode(auto=false)` 也走
+  `hard_reset_to`（与重置按钮同语义）：关闭自动档瞬间把 `ability_score` /
+  `trend` / `current_level` / `update_count` 全部清零，下次再开启自动档时以全新起点开始。
+  `manual → auto` 路径保持原样（软重置或不动）。
 - **与 `DifficultyConfig` 的关系**：
   - 旧 `DifficultyConfig.level`（String）保留 = **手动档 / 初始档 / 兜底档**
   - 新 `AdaptiveState.current_level` = **下一次实际使用档（mode = Auto 时）**

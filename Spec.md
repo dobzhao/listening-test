@@ -538,15 +538,16 @@ v1.1 起新增 `difficulty.mode` 字段（`"auto" | "manual"`，默认 `"manual"
 
 > **冲突说明**：§7.5 「重置自适应状态」按钮行为保留；本节描述**开关切换动作本身**的副作用。
 
-- 「自动切换难度」开关从 `auto` → `manual` 的瞬间，**自动**执行一次 `adaptive_difficulty::reset_to(&mut state, current_manual_level)`：
+- 「自动切换难度」开关从 `auto` → `manual` 的瞬间，**自动**执行一次硬重置
+  （走 `services::adaptive::hard_reset_to`，语义与「重置自适应状态」按钮一致）：
   - `ability_score = current_manual_level.initial_ability()`（即 100 / 300 / 500）
   - `trend = 0.0`
   - `current_level = current_manual_level`
-  - `update_count` **保留**（保持累计历史，不归零）
+  - `update_count = 0`（关闭自动档意味着「整体停用」自适应，下次再开启前不保留任何累计历史）
 - 「重置自适应状态」按钮行为保留，仅在 `mode = Auto` 时**可见**（手动模式下不渲染）；供用户在自动模式下手动清零
 - **持久化**：切换 / 重置后立即落盘 `adaptive_state.json`（与 §4.4.8 一致）
 - **UI 反馈**：
-  - 切换瞬间弹 toast「已切换到手动档，已重置自适应变量」
+  - 切换瞬间弹 toast「已切换到手动档，自适应变量已全部清零」
   - 按钮点击弹 toast「已重置自适应状态」
 
 ### 11.5 结算页能力分升 / 降可视化

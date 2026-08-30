@@ -47,9 +47,14 @@ pub struct ProgressPayload {
 pub const PROGRESS_EVENT: &str = "test-generation-progress";
 
 /// 完整预生成测试会话
+///
+/// `effective_level` 由调用方（`commands::test_session::generate_test_session`）按
+/// mode（manual → `config.difficulty.level`；auto → `adaptive_state.current_level`）解析后传入，
+/// 三个生成器内部用它选场景池 + 注入 `{{DIFFICULTY_DEMAND_*}}` 占位符文字（v1.1+）。
 pub async fn generate_full_session(
     app: &AppHandle,
     config: &AppConfig,
+    effective_level: &str,
 ) -> Result<TestSession, SessionError> {
     let http_client =
         build_client().map_err(|e| SessionError::HttpClient(e.to_string()))?;
@@ -58,7 +63,11 @@ pub async fn generate_full_session(
     let cache_dir: PathBuf =
         session_cache_dir(app, &session_id).map_err(SessionError::CacheDir)?;
 
-    info!(session_id = %session_id, "开始预生成测试会话");
+    info!(
+        session_id = %session_id,
+        effective_level = %effective_level,
+        "开始预生成测试会话"
+    );
 
     // 1. 1-4 题
     emit_progress(app, "llm_q1_4", "正在生成 1-4 题对话与选项", 0.1);
@@ -68,6 +77,7 @@ pub async fn generate_full_session(
         &config.llm_params,
         &config.prompts,
         &config.difficulty,
+        effective_level,
     )
     .await?;
     info!("1-4 题生成完成，共 {} 段", short_dialogues.len());
@@ -80,6 +90,7 @@ pub async fn generate_full_session(
         &config.llm_params,
         &config.prompts,
         &config.difficulty,
+        effective_level,
     )
     .await?;
     info!(
@@ -95,6 +106,7 @@ pub async fn generate_full_session(
         &config.llm_params,
         &config.prompts,
         &config.difficulty,
+        effective_level,
     )
     .await?;
     info!("15-18 题生成完成");
