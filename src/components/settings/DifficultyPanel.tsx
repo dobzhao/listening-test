@@ -5,7 +5,7 @@
 // 文本编辑直接绑 store，与 PromptEditor 行为一致。
 //
 // v1.1+ 在顶部追加自适应控制区：
-//   1. 固定只读卡片：ability_score / trend / update_count / current_level
+//   1. 固定只读卡片：ability_score / update_count / current_level
 //   2. 「自动切换难度」Switch：on/off 调 useAdaptiveStore.setMode()
 //   3. 「重置自适应状态」按钮：仅 mode=Auto 可见，二次确认
 //   4. 可折叠「自适应参数」子区域：15 个数字输入框 + 「恢复默认」按钮
@@ -163,7 +163,7 @@ export function DifficultyPanel() {
     <div className="space-y-4">
       {/* ===== v1.1+ 自适应区 ===== */}
 
-      {/* 1. 自适应状态固定只读卡片：进度条 + 趋势/更新次数 */}
+      {/* 1. 自适应状态固定只读卡片：进度条 + 练习次数 */}
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">自适应状态</CardTitle>
@@ -177,13 +177,9 @@ export function DifficultyPanel() {
             currentLevel={adaptiveState.currentLevel}
             params={params}
           />
-          <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t">
+          <div className="grid grid-cols-1 gap-4 text-sm pt-2 border-t">
             <SummaryCell
-              label="趋势"
-              value={adaptiveState.trend.toFixed(2)}
-            />
-            <SummaryCell
-              label="更新次数"
+              label="练习次数"
               value={String(adaptiveState.updateCount)}
             />
           </div>

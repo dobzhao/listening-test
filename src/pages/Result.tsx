@@ -65,7 +65,7 @@ export default function ResultPage() {
       : "";
     if (
       !(await confirm(
-        "确认清空之前的答题记录并重新作答？\n将清空 1-14 题选项、15-18 题填空与第 19 题录音，但保留题目。" + retestHint
+        "确认清空上次的答题记录并重新作答？" + retestHint
       ))
     ) {
       console.log("[Result] handleRetest: 用户取消");
@@ -113,7 +113,7 @@ export default function ResultPage() {
   const handleBackToMenu = async () => {
     if (
       !(await confirm(
-        "确认返回主菜单？\n将清空当前题目与所有作答（相当于重新打开程序）。"
+        "确认返回主菜单？\n将清空当前题目与所有作答。"
       ))
     ) {
       console.log("[Result] handleBackToMenu: 用户取消");
@@ -256,7 +256,7 @@ export default function ResultPage() {
             <Separator className="my-3" />
             <div className="grid grid-cols-3 gap-4 text-sm">
               <SummaryItem
-                label="1-14 题正确数"
+                label="1-14 题得分"
                 value={`${correctCount} / 14`}
               />
               <SummaryItem
@@ -344,8 +344,7 @@ function AbilityDeltaBadge({
  * 自适应难度调整卡片（v1.1+）：
  * - 顶部：旧档 → 新档 + ⬆/⬇/→ 箭头；档位变化时 Card 加 `border-primary` 高亮
  * - 进度条：可视化能力分前后位置；下方按当前档显示升级/降级距离
- * - 三行只读：ability_score 变化量、trend、update_count
- * - 可折叠 `<details>`（默认折叠）：trace.combined、ability_before/after、level_before/after、全 JSON
+ * - 一行只读：ability_score 变化量、update_count
  */
 function AdaptiveSummaryCard({ summary }: { summary: AdaptiveSummary }) {
   const levelChanged = summary.level_before !== summary.level_after;
@@ -364,7 +363,7 @@ function AdaptiveSummaryCard({ summary }: { summary: AdaptiveSummary }) {
       <CardHeader>
         <CardTitle className="text-lg">自适应难度调整</CardTitle>
         <CardDescription>
-          本次评分对能力分与档位的更新（v1.1+）
+          本次评分对能力分与档位的更新
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -393,7 +392,6 @@ function AdaptiveSummaryCard({ summary }: { summary: AdaptiveSummary }) {
             abilityBefore={summary.ability_before}
           />
           <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
-            <span className="inline-block w-2.5 h-0.5 bg-slate-400 align-middle" />
             <span>调整前：{summary.ability_before.toFixed(1)}</span>
             <span className={`font-mono font-semibold ml-auto ${
               delta > 1e-9 ? "text-emerald-700" : delta < -1e-9 ? "text-rose-700" : "text-muted-foreground"
@@ -405,24 +403,12 @@ function AdaptiveSummaryCard({ summary }: { summary: AdaptiveSummary }) {
         </div>
 
         <Separator />
-        <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="grid grid-cols-1 gap-4 text-sm">
           <SummaryItem
-            label="趋势"
-            value={`${summary.trend_after.toFixed(2)}`}
-          />
-          <SummaryItem
-            label="更新次数"
+            label="练习次数"
             value={`${summary.update_count_after}`}
           />
         </div>
-        <details className="text-sm">
-          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-            展开详细 trace
-          </summary>
-          <pre className="mt-2 text-xs leading-relaxed p-3 bg-muted/30 rounded overflow-x-auto">
-            {JSON.stringify(summary.trace, null, 2)}
-          </pre>
-        </details>
       </CardContent>
     </Card>
   );
@@ -523,7 +509,7 @@ function BlankSection({ results }: { results: BlankResult[] }) {
       <CardHeader>
         <CardTitle className="text-lg">15-18 题（听后填词）</CardTitle>
         <CardDescription>
-          由 LLM 按 9.4 节评分 Prompt 评分（大小写不敏感、单复数严格、英美拼写允许）
+          由 LLM 评分（大小写不敏感、单复数要求严格、允许英式英语与美式英语拼写差异）
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -592,7 +578,7 @@ function RetellSection({
       <CardHeader>
         <CardTitle className="text-lg">19 题（听后转述）</CardTitle>
         <CardDescription>
-          STT 转写 → LLM 按 9.5 节评分 Prompt 评分
+          STT 转写 → LLM 评分
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -616,7 +602,7 @@ function RetellSection({
 
         <details className="text-sm">
           <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-            STT 转写文本（点击展开）
+            STT 转写文本
           </summary>
           <ScrollArea className="mt-2 max-h-60 rounded border bg-muted/30 p-3">
             <p className="whitespace-pre-wrap text-xs leading-relaxed">
@@ -628,7 +614,7 @@ function RetellSection({
         {passage && (
           <details className="text-sm">
             <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-              参考听力原文（点击展开）
+              参考听力原文
             </summary>
             <p className="mt-2 text-xs leading-relaxed p-3 bg-muted/30 rounded whitespace-pre-wrap">
               {passage}

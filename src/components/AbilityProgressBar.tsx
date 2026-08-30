@@ -2,21 +2,23 @@
 //
 // 设计要点：
 // - 整条轨道长度对应 [ability_min, ability_max] 的能力分区间（默认 0-600）
-// - 三档难度区段以半透明背景色铺底，重叠部分（hysteresis buffer）自然形成
-//   「两个相邻档位都能站稳」的视觉缓冲
-// - 四个档位阈值（180/220/380/420 默认值）用细虚线标在轨道上方
-// - 当前能力值以粗实线 + 数字标签高亮；可选显示「变化前」位置（淡色细线）用于结算页
-// - 下方提示文字按当前档位选择性展示：
+// - 轨道底色统一为白色，加 1px 边框便于在白底上识别边界
+// - 档位阈值（180/220/380/420 默认值）按当前档位选择性用黑色细虚线标在轨道上方：
+//   - 初中：只显示升入高中的线（upper_senior）
+//   - 高中：只显示定义高中区间的两条线（lower_senior / upper_undergrad）
+//   - 大学：只显示降到高中的线（lower_undergrad）
+// - 当前能力值以黑色填充条展示；与「变化前」对比时，差异段着色：
+//   - 得分（ability > abilityBefore）：稳定段黑色 + 增长段绿色
+//   - 扣分（ability < abilityBefore）：当前段黑色 + 扣分段红色
+// - 下方距离升级 / 降级提示按当前档位选择性展示：
 //   - 初中：仅显示距离升入高中还差多少分
 //   - 高中：同时显示距离升入大学 / 降回初中各差多少分
 //   - 大学：仅显示距离降回高中还差多少分
 //
-// 配色策略（与 DifficultyPanel / Result 页中已有的 emerald/rose 语义一致）：
-// - 初中：sky    （冷色，入门）
-// - 高中：amber  （中性，过渡）
-// - 大学：emerald（暖色，进阶）
-// - 升级提示：emerald（绿色积极）
-// - 降级提示：rose（红色警示）
+// 配色策略（极简 + 对比可视化）：
+// - 轨道底色：white + 边框
+// - 分数填充：黑色（稳定段）+ 绿/红（得分/扣分段）
+// - 升降级节点：black
 
 import { useMemo } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
@@ -44,31 +46,25 @@ export interface AbilityProgressBarProps {
 }
 
 interface ZoneStyle {
-  /** 背景填充色 */
-  bgClass: string;
   /** 档位文字 / 标记 */
   textClass: string;
-  /** 当前档位时填充条颜色 */
-  fillClass: string;
 }
 
 const ZONE_STYLE: Record<DifficultyLevel, ZoneStyle> = {
   junior_high: {
-    bgClass: "bg-sky-200/60",
     textClass: "text-sky-700",
-    fillClass: "bg-sky-500",
   },
   senior_high: {
-    bgClass: "bg-amber-200/60",
     textClass: "text-amber-700",
-    fillClass: "bg-amber-500",
   },
   undergraduate: {
-    bgClass: "bg-emerald-200/60",
     textClass: "text-emerald-700",
-    fillClass: "bg-emerald-500",
   },
 };
+
+/** 得分/扣分配色（与绿色 / 红色 500 对齐） */
+const COLOR_GAIN = "#22c55e"; // tailwind green-500
+const COLOR_LOSS = "#ef4444"; // tailwind red-500
 
 export function AbilityProgressBar({
   ability,
@@ -95,6 +91,49 @@ export function AbilityProgressBar({
   const abilityBeforePct =
     abilityBefore !== undefined ? toPct(abilityBefore) : null;
 
+  // 分数条配色逻辑（基于 abilityBefore 对比）：
+  // - 无 before（设置面板）：纯黑色填充（0 → 当前能力值）
+  // - 得分（ability > abilityBefore）：黑色稳定段（0 → before）+ 绿色增长段（before → ability）
+  // - 扣分（ability < abilityBefore）：黑色当前段（0 → ability）+ 红色扣分段（ability → before）
+  // 用单个 div + linear-gradient 实现，避免 3px 高的条上相邻 div 拼接产生可见缝隙
+  const hasBefore = abilityBefore !== undefined;
+  const beforePct = hasBefore ? abilityBeforePct! : 0;
+  const fillEndPct = hasBefore
+    ? Math.max(abilityPct, beforePct)
+    : abilityPct;
+  const stableEndPct = hasBefore
+    ? Math.min(abilityPct, beforePct)
+    : abilityPct;
+  const gained = hasBefore && ability > abilityBefore!;
+  const lost = hasBefore && ability < abilityBefore!;
+  const stableRatio =
+    fillEndPct > 0 ? (stableEndPct / fillEndPct) * 100 : 0;
+  const fillStyle: React.CSSProperties = gained
+    ? {
+        width: `${fillEndPct}%`,
+        background: `linear-gradient(to right, #000 0%, #000 ${stableRatio}%, ${COLOR_GAIN} ${stableRatio}%, ${COLOR_GAIN} 100%)`,
+      }
+    : lost
+    ? {
+        width: `${fillEndPct}%`,
+        background: `linear-gradient(to right, #000 0%, #000 ${stableRatio}%, ${COLOR_LOSS} ${stableRatio}%, ${COLOR_LOSS} 100%)`,
+      }
+    : {
+        width: `${fillEndPct}%`,
+        backgroundColor: "#000",
+      };
+
+  // 按当前档位选择性展示阈值线：
+  // - 初中：只显示升入高中的线（upper_senior）
+  // - 高中：只显示定义高中区间的两条线（lower_senior / upper_undergrad）
+  // - 大学：只显示降到高中的线（lower_undergrad）
+  const visibleThresholds = {
+    lower_senior: currentLevel === "senior_high",
+    upper_senior: currentLevel === "junior_high",
+    lower_undergrad: currentLevel === "undergraduate",
+    upper_undergrad: currentLevel === "senior_high",
+  } as const;
+
   const activeStyle = ZONE_STYLE[currentLevel];
 
   return (
@@ -115,99 +154,64 @@ export function AbilityProgressBar({
         </div>
       </div>
 
-      {/* 轨道 */}
-      <div className="relative h-3 w-full rounded-full bg-muted overflow-visible">
-        {/* 三档区段背景（叠加形成 buffer） */}
+      {/* 轨道（白底） */}
+      <div className="relative h-3 w-full rounded-full bg-white border overflow-visible">
+        {/* 分数填充：黑色稳定 + 绿色得分 / 红色扣分 */}
         <div
-          className={`absolute inset-y-0 left-0 rounded-l-full ${ZONE_STYLE.junior_high.bgClass}`}
-          style={{ width: `${upperSeniorPct}%` }}
-        />
-        <div
-          className={`absolute inset-y-0 ${ZONE_STYLE.senior_high.bgClass}`}
-          style={{
-            left: `${lowerSeniorPct}%`,
-            width: `${upperUndergradPct - lowerSeniorPct}%`,
-          }}
-        />
-        <div
-          className={`absolute inset-y-0 right-0 rounded-r-full ${ZONE_STYLE.undergraduate.bgClass}`}
-          style={{ width: `${100 - lowerUndergradPct}%` }}
+          className="absolute inset-y-0 left-0 rounded-full transition-all"
+          style={fillStyle}
         />
 
-        {/* 当前能力值填充 */}
-        <div
-          className={`absolute inset-y-0 left-0 rounded-full transition-all ${activeStyle.fillClass}`}
-          style={{ width: `${abilityPct}%` }}
-        />
-
-        {/* 四个档位阈值细虚线 */}
-        <ThresholdTick position={upperSeniorPct} />
-        <ThresholdTick position={lowerSeniorPct} />
-        <ThresholdTick position={upperUndergradPct} />
-        <ThresholdTick position={lowerUndergradPct} />
-
-        {/* 「调整前」marker（淡色） */}
-        {abilityBeforePct !== null && abilityBefore !== undefined && (
-          <div
-            className="absolute -top-1.5 h-6 w-px bg-slate-400"
-            style={{ left: `${abilityBeforePct}%` }}
-            aria-label={`调整前能力值 ${abilityBefore.toFixed(1)}`}
-          />
+        {/* 档位阈值细虚线（按当前档位选择性展示） */}
+        {visibleThresholds.upper_senior && (
+          <ThresholdTick position={upperSeniorPct} />
         )}
-
-        {/* 「当前」marker（粗实线 + 顶部小三角） */}
-        <div
-          className="absolute -top-2 h-7 w-0.5 bg-slate-900"
-          style={{ left: `${abilityPct}%`, transform: "translateX(-1px)" }}
-          aria-label={`当前能力值 ${ability.toFixed(1)}`}
-        >
-          <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-slate-900" />
-        </div>
+        {visibleThresholds.lower_senior && (
+          <ThresholdTick position={lowerSeniorPct} />
+        )}
+        {visibleThresholds.upper_undergrad && (
+          <ThresholdTick position={upperUndergradPct} />
+        )}
+        {visibleThresholds.lower_undergrad && (
+          <ThresholdTick position={lowerUndergradPct} />
+        )}
       </div>
 
-      {/* 轴标尺：四个阈值 + 两端 */}
+      {/* 轴标尺：阈值分数（按当前档位选择性展示）+ 两端 */}
       <div className="relative h-4 mt-1.5 text-[10px] text-muted-foreground font-mono">
         <TickLabel position={0} align="start" value={params.ability_min} />
-        <TickLabel
-          position={lowerSeniorPct}
-          value={thresholds.lower_senior}
-          hint="↓"
-        />
-        <TickLabel
-          position={upperSeniorPct}
-          value={thresholds.upper_senior}
-          hint="↑"
-        />
-        <TickLabel
-          position={lowerUndergradPct}
-          value={thresholds.lower_undergrad}
-          hint="↓"
-        />
-        <TickLabel
-          position={upperUndergradPct}
-          value={thresholds.upper_undergrad}
-          hint="↑"
-        />
+        {visibleThresholds.lower_senior && (
+          <TickLabel
+            position={lowerSeniorPct}
+            value={thresholds.lower_senior}
+            hint="↓"
+          />
+        )}
+        {visibleThresholds.upper_senior && (
+          <TickLabel
+            position={upperSeniorPct}
+            value={thresholds.upper_senior}
+            hint="↑"
+          />
+        )}
+        {visibleThresholds.lower_undergrad && (
+          <TickLabel
+            position={lowerUndergradPct}
+            value={thresholds.lower_undergrad}
+            hint="↓"
+          />
+        )}
+        {visibleThresholds.upper_undergrad && (
+          <TickLabel
+            position={upperUndergradPct}
+            value={thresholds.upper_undergrad}
+            hint="↑"
+          />
+        )}
         <TickLabel
           position={100}
           align="end"
           value={params.ability_max}
-        />
-      </div>
-
-      {/* 三档图例 */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-1 text-[10px] text-muted-foreground">
-        <LegendDot
-          colorClass={ZONE_STYLE.junior_high.fillClass}
-          label={`初中 ≤ ${thresholds.upper_senior.toFixed(0)}`}
-        />
-        <LegendDot
-          colorClass={ZONE_STYLE.senior_high.fillClass}
-          label={`高中 ${thresholds.lower_senior.toFixed(0)}–${thresholds.upper_undergrad.toFixed(0)}`}
-        />
-        <LegendDot
-          colorClass={ZONE_STYLE.undergraduate.fillClass}
-          label={`大学 ≥ ${thresholds.lower_undergrad.toFixed(0)}`}
         />
       </div>
 
@@ -231,7 +235,7 @@ export function AbilityProgressBar({
 function ThresholdTick({ position }: { position: number }) {
   return (
     <div
-      className="absolute -top-1 h-5 w-px bg-slate-500/70"
+      className="absolute -top-1 h-5 w-px bg-black"
       style={{ left: `${position}%` }}
       aria-hidden
     />
@@ -265,15 +269,6 @@ function TickLabel({
     >
       {value.toFixed(0)}
       {hint && <span className="ml-0.5 opacity-60">{hint}</span>}
-    </span>
-  );
-}
-
-function LegendDot({ colorClass, label }: { colorClass: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`inline-block w-2.5 h-2.5 rounded-full ${colorClass}`} />
-      {label}
     </span>
   );
 }

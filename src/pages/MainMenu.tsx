@@ -272,11 +272,6 @@ export default function MainMenu() {
                   本程序使用本地/自建 OpenAI 兼容 LLM/TTS/STT 服务，所有题目
                   内容均由模型实时生成。
                 </p>
-                <p>
-                  阶段交付：当前为{" "}
-                  <span className="font-mono text-foreground">Phase 2</span>，
-                  已完成设置界面与题目预生成流水线（LLM + TTS）。
-                </p>
               </CardContent>
             </Card>
           </div>
