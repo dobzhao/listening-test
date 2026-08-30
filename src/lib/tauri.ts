@@ -100,8 +100,13 @@ export async function transcribeAudio(
 // ===== 设备 =====
 
 export interface DeviceInfo {
+  /** cpal 原始设备名，测试设备时按此名查找 */
   name: string;
   is_default: boolean;
+  /** 界面展示用的友好名称 */
+  display_name: string;
+  /** false 表示该项只是 ALSA 插件噪音，默认折叠 */
+  recommended: boolean;
 }
 
 export async function listInputDevices(): Promise<DeviceInfo[]> {

@@ -30,11 +30,28 @@ import {
   type DeviceInfo,
 } from "@/lib/tauri";
 
+/**
+ * 取推荐设备列表。Linux 下后端会把同一块声卡的十余个 ALSA 插件入口折叠成一项，
+ * 只有代表项与 `default` 会被标记 recommended。
+ * 后端已保证列表非空时至少有一项 recommended，这里的兜底仅作防御。
+ */
+function recommendedOf(list: DeviceInfo[]): DeviceInfo[] {
+  const pool = list.filter((d) => d.recommended);
+  return pool.length > 0 ? pool : list;
+}
+
+/** 自动选中项：始终从推荐列表里挑，即使用户勾选了「显示全部设备」 */
+function pickDefault(list: DeviceInfo[]): DeviceInfo | undefined {
+  const pool = recommendedOf(list);
+  return pool.find((d) => d.is_default) ?? pool[0];
+}
+
 export function MicTest() {
   const [inputs, setInputs] = useState<DeviceInfo[]>([]);
   const [outputs, setOutputs] = useState<DeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState<string>("");
   const [selectedOutput, setSelectedOutput] = useState<string>("");
+  const [showAll, setShowAll] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,9 +75,9 @@ export function MicTest() {
       ]);
       setInputs(inp);
       setOutputs(out);
-      // 默认选中第一个（系统默认）设备
-      const defIn = inp.find((d) => d.is_default) ?? inp[0];
-      const defOut = out.find((d) => d.is_default) ?? out[0];
+      // 默认选中系统默认设备（Linux 下即 ALSA 的 `default`）
+      const defIn = pickDefault(inp);
+      const defOut = pickDefault(out);
       if (defIn) setSelectedInput(defIn.name);
       if (defOut) setSelectedOutput(defOut.name);
     } catch (e) {
@@ -147,6 +164,11 @@ export function MicTest() {
     }
   };
 
+  const visible = (list: DeviceInfo[]) =>
+    showAll ? list : recommendedOf(list);
+  const visibleInputs = visible(inputs);
+  const visibleOutputs = visible(outputs);
+
   return (
     <Card>
       <CardHeader>
@@ -155,16 +177,27 @@ export function MicTest() {
             <Mic className="w-5 h-5" />
             麦克风与扬声器设备测试
           </CardTitle>
-          <Button variant="ghost" size="sm" onClick={refresh}>
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <>
-                <RefreshCw className="w-4 h-4 mr-1" />
-                刷新
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showAll}
+                onChange={(e) => setShowAll(e.target.checked)}
+                className="accent-primary"
+              />
+              显示全部设备
+            </label>
+            <Button variant="ghost" size="sm" onClick={refresh}>
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-1" />
+                  刷新
+                </>
+              )}
+            </Button>
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">
           选择一个输入设备测试录音，选择一个输出设备测试播放。
@@ -182,15 +215,16 @@ export function MicTest() {
           <p className="text-sm font-medium flex items-center gap-1.5">
             <Mic className="w-4 h-4" /> 输入设备（麦克风）
           </p>
-          {inputs.length === 0 ? (
+          {visibleInputs.length === 0 ? (
             <p className="text-sm text-muted-foreground">未检测到输入设备</p>
           ) : (
             <div className="space-y-1.5">
-              {inputs.map((d, i) => {
+              {visibleInputs.map((d) => {
                 const checked = selectedInput === d.name;
                 return (
                   <label
-                    key={i}
+                    key={d.name}
+                    title={d.name}
                     className={`flex items-center justify-between p-2.5 rounded border cursor-pointer transition-colors ${
                       checked
                         ? "border-primary bg-primary/5"
@@ -206,7 +240,14 @@ export function MicTest() {
                         onChange={() => setSelectedInput(d.name)}
                         className="accent-primary"
                       />
-                      <span className="text-sm font-mono">{d.name}</span>
+                      <div className="flex flex-col">
+                        <span className="text-sm">{d.display_name}</span>
+                        {d.display_name !== d.name && (
+                          <span className="text-[11px] text-muted-foreground font-mono">
+                            {d.name}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {d.is_default && <Badge variant="success">默认</Badge>}
                   </label>
@@ -263,15 +304,16 @@ export function MicTest() {
           <p className="text-sm font-medium flex items-center gap-1.5">
             <Volume2 className="w-4 h-4" /> 输出设备（扬声器）
           </p>
-          {outputs.length === 0 ? (
+          {visibleOutputs.length === 0 ? (
             <p className="text-sm text-muted-foreground">未检测到输出设备</p>
           ) : (
             <div className="space-y-1.5">
-              {outputs.map((d, i) => {
+              {visibleOutputs.map((d) => {
                 const checked = selectedOutput === d.name;
                 return (
                   <label
-                    key={i}
+                    key={d.name}
+                    title={d.name}
                     className={`flex items-center justify-between p-2.5 rounded border cursor-pointer transition-colors ${
                       checked
                         ? "border-primary bg-primary/5"
@@ -287,7 +329,14 @@ export function MicTest() {
                         onChange={() => setSelectedOutput(d.name)}
                         className="accent-primary"
                       />
-                      <span className="text-sm font-mono">{d.name}</span>
+                      <div className="flex flex-col">
+                        <span className="text-sm">{d.display_name}</span>
+                        {d.display_name !== d.name && (
+                          <span className="text-[11px] text-muted-foreground font-mono">
+                            {d.name}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {d.is_default && <Badge variant="success">默认</Badge>}
                   </label>
