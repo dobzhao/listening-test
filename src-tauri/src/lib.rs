@@ -10,6 +10,7 @@ pub mod utils;
 use commands::adaptive::AdaptiveStateHandle;
 use commands::audio::AudioPlaybackState;
 use commands::config::ConfigState;
+use models::pregen::PregenPoolRuntime;
 use commands::recorder::RecorderGlobal;
 use commands::test_flow::FlowGlobal;
 use commands::test_session::SessionState;
@@ -71,11 +72,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ConfigState::default())
         .manage(SessionState::default())
         .manage(FlowGlobal::default())
         .manage(RecorderGlobal::default())
         .manage(AudioPlaybackState::default())
+        .manage(PregenPoolRuntime::default())
         .setup(|app| {
             // v1.1+ 自适应状态启动加载：从 adaptive_state.json 读取（含损坏恢复），
             // 再注入 AdaptiveStateHandle，替代 Default 占位的 junior_high。
@@ -92,6 +95,15 @@ pub fn run() {
 
             // 同步加载 adaptive_params.json（仅日志，不放内存：score 命令每次从磁盘读，确保 UI 编辑后立即生效）
             let _ = services::adaptive::load_params_from_disk(handle);
+
+            // 预生成题库启动恢复：扫描 pregen/{uuid}/，缺文件则清理；完整条目加入 Runtime.pool
+            let recovered = services::pregen::recover_index(handle);
+            let pregen_runtime = app.state::<PregenPoolRuntime>();
+            if let Ok(mut guard) = pregen_runtime.pool.try_write() {
+                *guard = recovered;
+            } else {
+                tracing::warn!("pregen Runtime.pool 已被占用，启动恢复失败");
+            }
 
             Ok(())
         })
@@ -142,6 +154,12 @@ pub fn run() {
             commands::adaptive::reset_adaptive_state,
             commands::adaptive::set_adaptive_mode,
             commands::adaptive::update_adaptive_params,
+            // 预生成题库（v1.1+）
+            commands::pregen::get_pregen_summary,
+            commands::pregen::list_unused_pregen,
+            commands::pregen::enqueue_pregen,
+            commands::pregen::cancel_pregen,
+            commands::pregen::start_test_from_pregen,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

@@ -7,6 +7,7 @@ pub mod audio;
 pub mod config;
 pub mod device;
 pub mod llm;
+pub mod pregen;
 pub mod recorder;
 pub mod scoring;
 pub mod stt;

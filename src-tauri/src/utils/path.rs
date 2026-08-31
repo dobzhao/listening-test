@@ -89,6 +89,34 @@ pub fn session_cache_dir(app: &AppHandle, session_id: &str) -> Result<PathBuf, S
     Ok(dir)
 }
 
+/// 预生成题库根目录：`<app_data_dir>/pregen/`，不存在则创建
+///
+/// 与 `cache/` 目录分离：预生成题库（unused）放这里，进入测试时 move 到 `cache/{uuid}/`
+pub fn pregen_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut dir = app_data_dir(app)?;
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建应用数据目录失败: {e}"))?;
+    }
+    dir.push("pregen");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建题库目录失败: {e}"))?;
+    }
+    Ok(dir)
+}
+
+/// 某套预生成题库的目录：`<app_data_dir>/pregen/{session_id}/`
+pub fn pregen_dir(app: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
+    let mut dir = pregen_root(app)?;
+    dir.push(session_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建题库会话目录失败: {e}"))?;
+    Ok(dir)
+}
+
+/// 题库索引文件：`<app_data_dir>/pregen/index.json`
+pub fn pregen_index_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(pregen_root(app)?.join("index.json"))
+}
+
 /// 原子写入 JSON：在 path 同目录下生成 `<name>.tmp.<uuid>` 临时文件，写入后 `fs::rename`
 /// 覆盖。`rename` 在同一文件系统上是原子的（Linux/macOS/Win NTFS 都满足）；
 /// 若跨设备 / rename 失败则 fallback 到非原子 `fs::write`，并 warn 日志告知。

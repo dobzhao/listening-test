@@ -3,6 +3,9 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { useSettingsStore } from "@/store/settings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ToastHost } from "@/components/ToastHost";
+import { CloseGuard } from "@/components/CloseGuard";
+import { usePregenStore } from "@/store/pregen";
+import { usePregenEvents } from "@/hooks/usePregenEvents";
 import {
   installAdaptiveEventListeners,
   uninstallAdaptiveEventListeners,
@@ -30,11 +33,16 @@ export default function App() {
       void useAdaptiveStore.getState().load();
     }
     installAdaptiveEventListeners();
+    // 预生成题库摘要加载 + 事件订阅
+    void usePregenStore.getState().loadSummary();
     return () => uninstallAdaptiveEventListeners();
   }, [loaded, load, settingsConfig.difficulty.mode]);
 
+  // 全局订阅 pregen 事件（progress / finished / failed）
+  usePregenEvents();
+
   return (
-    <>
+    <CloseGuard>
       {/* 全局确认对话框：替代 window.confirm()，规避 macOS WKWebView 下
           wry 未实现 confirm panel 的问题。 */}
       <ConfirmDialog />
@@ -47,6 +55,6 @@ export default function App() {
         <Route path="/result" element={<ResultPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </>
+    </CloseGuard>
   );
 }

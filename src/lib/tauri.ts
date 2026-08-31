@@ -416,3 +416,65 @@ export async function onAdaptiveStateReset(
     handler(e.payload)
   );
 }
+
+// ===== 预生成题库（v1.1+） =====
+
+import type {
+  PregenEntry,
+  PregenSummary,
+  PregenProgressPayload,
+  PregenFinishedPayload,
+  PregenFailedPayload,
+} from "@/types/pregen";
+
+/** 拉取题库摘要（轮询用） */
+export async function getPregenSummary(): Promise<PregenSummary> {
+  return invoke<PregenSummary>("get_pregen_summary");
+}
+
+/** 列出所有 unused 题库（预留，MVP 不调用） */
+export async function listUnusedPregen(): Promise<PregenEntry[]> {
+  return invoke<PregenEntry[]>("list_unused_pregen");
+}
+
+/** 把 N 套加入预生成队列 */
+export async function enqueuePregen(count: number): Promise<void> {
+  await invoke("enqueue_pregen", { count });
+}
+
+/** 取消当前队列（worker 在下一套前停下） */
+export async function cancelPregen(): Promise<void> {
+  await invoke("cancel_pregen");
+}
+
+/**
+ * 从题库激活最早一条 unused（按当前 effective_level 过滤）并进入测试。
+ * 后端会自动 enqueue(1) 在后台再补 1 套。
+ */
+export async function startTestFromPregen(): Promise<TestSession> {
+  return invoke<TestSession>("start_test_from_pregen");
+}
+
+export async function onPregenProgress(
+  handler: (payload: PregenProgressPayload) => void
+): Promise<UnlistenFn> {
+  return listen<PregenProgressPayload>("pregen-progress", (e) =>
+    handler(e.payload)
+  );
+}
+
+export async function onPregenFinished(
+  handler: (payload: PregenFinishedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<PregenFinishedPayload>("pregen-finished", (e) =>
+    handler(e.payload)
+  );
+}
+
+export async function onPregenFailed(
+  handler: (payload: PregenFailedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<PregenFailedPayload>("pregen-failed", (e) =>
+    handler(e.payload)
+  );
+}

@@ -20,6 +20,10 @@ interface TestState {
   start: () => Promise<void>;
   load: () => Promise<void>;
   reset: () => Promise<void>;
+  /**
+   * 直接注入一个 session（v1.1+ 题库系统：从题库激活后调用，避免走 generate 路径）
+   */
+  setSession: (session: TestSession) => void;
   setProgress: (p: ProgressPayload) => void;
   setError: (e: string) => void;
 }
@@ -65,6 +69,11 @@ export const useTestStore = create<TestState>((set, get) => ({
     await clearTestSession();
     set({ session: null, stage: "idle", progress: null, error: null });
     console.log("[test] reset: 前端 store 已重置（session 清空到 null）");
+  },
+
+  setSession: (session) => {
+    console.log(`[test] setSession: 注入 session_id=${session.session_id}`);
+    set({ session, stage: "ready", progress: null, error: null });
   },
 
   setProgress: (p) => set({ progress: p }),

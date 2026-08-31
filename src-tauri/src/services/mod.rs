@@ -9,6 +9,7 @@ pub mod audio_player;
 pub mod audio_processor;
 pub mod http_client;
 pub mod llm_service;
+pub mod pregen;
 pub mod prompt_engine_service;
 pub mod question_generator;
 pub mod recorder;

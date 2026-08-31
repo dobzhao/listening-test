@@ -22,6 +22,7 @@ tauri-build = { version = "2", features = [] }
 # Tauri 2.0 核心
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
 
 # 自适应难度算法 crate（v1.1+）
 adaptive_difficulty = { path = "adaptive_difficulty" }
@@ -80,6 +81,10 @@ base64 = "0.22"
 
 # 随机采样（场景占位符抽取）
 fastrand = "2"
+
+# SHA256（v1.1+ 预生成题库 prompts 哈希）
+sha2 = "0.10"
+hex = "0.4"
 
 [features]
 # 默认 Tauri 自定义协议
