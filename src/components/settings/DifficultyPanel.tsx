@@ -1,14 +1,15 @@
 // 题目难度设置：当前激活档下拉框 + 三档文字编辑（每档独立编辑，独立恢复默认）
 //
-// 顶层 Card 放激活档下拉框；下方三个 Card 分别对应三档难度（始终全部展示，
+// 「难度要求设置」小节标题下挂三个 Card，分别对应三档难度（始终全部展示，
 // 便于跨档对照）。每段文字旁有「恢复默认」按钮，每档标题旁有「恢复整档」按钮。
 // 文本编辑直接绑 store，与 PromptEditor 行为一致。
 //
-// v1.1+ 在顶部追加自适应控制区：
-//   1. 固定只读卡片：ability_score / update_count / current_level
-//   2. 「自动切换难度」Switch：on/off 调 useAdaptiveStore.setMode()
-//   3. 「重置自适应状态」按钮：仅 mode=Auto 可见，二次确认
-//   4. 可折叠「自适应参数」子区域：15 个数字输入框 + 「恢复默认」按钮
+// v1.1+ 在顶部追加自适应控制区，卡片按 mode 互斥展示：
+//   1. 「自适应难度模式」Switch（始终置顶）：on/off 调 useAdaptiveStore.setMode()
+//      + 起始档 radio（仅 manual）+ 「重置自适应状态」按钮（仅 auto，二次确认）
+//   2. 「自适应状态」只读卡片：仅 mode=Auto 展示（能力进度条 / 练习次数）
+//   3. 可折叠「自适应参数（高级）」：仅 mode=Auto 展示，15 个数字输入框 + 「恢复默认」
+//   4. 「手动档位」下拉框：仅 mode=Manual 展示（自动档下整卡隐藏，无需 disabled 态）
 
 import { useEffect, useState } from "react";
 import {
@@ -163,33 +164,10 @@ export function DifficultyPanel() {
     <div className="space-y-4">
       {/* ===== v1.1+ 自适应区 ===== */}
 
-      {/* 1. 自适应状态固定只读卡片：进度条 + 练习次数 */}
+      {/* 1. 「自动切换难度」Switch */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">自适应状态</CardTitle>
-          <CardDescription>
-            每次 19 题评分后自动更新（仅在「自动切换难度」开启时实际生效）
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <AbilityProgressBar
-            ability={adaptiveState.abilityScore}
-            currentLevel={adaptiveState.currentLevel}
-            params={params}
-          />
-          <div className="grid grid-cols-1 gap-4 text-sm pt-2 border-t">
-            <SummaryCell
-              label="练习次数"
-              value={String(adaptiveState.updateCount)}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 2. 「自动切换难度」Switch */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">自适应模式</CardTitle>
+          <CardTitle className="text-lg">自适应难度模式</CardTitle>
           <CardDescription>
             开启后系统根据每次 19 题的得分率自动调整下次测试的难度档位；关闭时使用下方手动选档。
           </CardDescription>
@@ -201,7 +179,7 @@ export function DifficultyPanel() {
                 自动切换难度
               </Label>
               <p className="text-xs text-muted-foreground">
-                开启后手动档下拉框被禁用；关闭后立即重置自适应变量。
+                开启后隐藏「手动档位」并展示自适应状态与参数；关闭后立即重置自适应变量。
               </p>
             </div>
             <button
@@ -254,7 +232,7 @@ export function DifficultyPanel() {
             </div>
           )}
 
-          {/* 3. 「重置自适应状态」按钮：仅 mode=Auto 时可见 */}
+          {/* 1c. 「重置自适应状态」按钮：仅 mode=Auto 时可见 */}
           {adaptiveMode === "auto" && (
             <div className="flex items-center justify-between rounded-md border border-dashed p-3">
               <div className="space-y-0.5">
@@ -272,108 +250,112 @@ export function DifficultyPanel() {
         </CardContent>
       </Card>
 
-      {/* 4. 可折叠「自适应参数」子区域 */}
-      <Card>
-        <CardHeader>
-          <button
-            type="button"
-            className="flex items-center justify-between w-full text-left"
-            onClick={() => setParamsOpen((v) => !v)}
-          >
-            <CardTitle className="text-lg flex items-center gap-2">
-              {paramsOpen ? (
-                <ChevronDown className="w-4 h-4" />
-              ) : (
-                <ChevronRight className="w-4 h-4" />
-              )}
-              自适应参数（高级）
-            </CardTitle>
-            <span className="text-xs text-muted-foreground">
-              {paramsOpen ? "收起" : "展开"}
-            </span>
-          </button>
-          <CardDescription>
-            15 个算法参数，调整后下一次评分生效（不影响已落盘的 adaptive_state.json）
-          </CardDescription>
-        </CardHeader>
-        {paramsOpen && (
+      {/* 2. 自适应状态固定只读卡片：进度条 + 练习次数（仅自动档展示） */}
+      {adaptiveMode === "auto" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">自适应状态</CardTitle>
+            <CardDescription>每次 19 题评分后自动更新</CardDescription>
+          </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleParamsReset}
-              >
-                <RotateCcw className="w-4 h-4 mr-1" />
-                恢复默认
-              </Button>
+            <AbilityProgressBar
+              ability={adaptiveState.abilityScore}
+              currentLevel={adaptiveState.currentLevel}
+              params={params}
+            />
+            <div className="grid grid-cols-1 gap-4 text-sm pt-2 border-t">
+              <SummaryCell
+                label="练习次数"
+                value={String(adaptiveState.updateCount)}
+              />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {ADAPTIVE_PARAMS_META.map(({ key, label }) => (
-                <div key={key} className="space-y-1">
-                  <Label htmlFor={`param-${key}`} className="text-xs">
-                    {label} ({key})
-                  </Label>
-                  <Input
-                    id={`param-${key}`}
-                    type="number"
-                    step="any"
-                    value={params[key]}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (!Number.isFinite(v)) return;
-                      updateParams({ ...params, [key]: v });
-                    }}
-                    className="font-mono text-sm"
-                  />
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              保存方式：任意输入框失焦后自动调 <code>update_adaptive_params</code> 命令落盘。
-            </p>
           </CardContent>
-        )}
-      </Card>
+        </Card>
+      )}
+
+      {/* 3. 可折叠「自适应参数」子区域（仅自动档展示） */}
+      {adaptiveMode === "auto" && (
+        <Card>
+          <CardHeader>
+            <button
+              type="button"
+              className="flex items-center justify-between w-full text-left"
+              onClick={() => setParamsOpen((v) => !v)}
+            >
+              <CardTitle className="text-lg flex items-center gap-2">
+                {paramsOpen ? (
+                  <ChevronDown className="w-4 h-4" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
+                )}
+                自适应参数（高级）
+              </CardTitle>
+              <span className="text-xs text-muted-foreground">
+                {paramsOpen ? "收起" : "展开"}
+              </span>
+            </button>
+            <CardDescription>
+              15 个算法参数，调整后下一次评分生效（不影响已落盘的 adaptive_state.json）
+            </CardDescription>
+          </CardHeader>
+          {paramsOpen && (
+            <CardContent className="space-y-4">
+              <div className="flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleParamsReset}
+                >
+                  <RotateCcw className="w-4 h-4 mr-1" />
+                  恢复默认
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {ADAPTIVE_PARAMS_META.map(({ key, label }) => (
+                  <div key={key} className="space-y-1">
+                    <Label htmlFor={`param-${key}`} className="text-xs">
+                      {label} ({key})
+                    </Label>
+                    <Input
+                      id={`param-${key}`}
+                      type="number"
+                      step="any"
+                      value={params[key]}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) return;
+                        updateParams({ ...params, [key]: v });
+                      }}
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                保存方式：任意输入框失焦后自动调 <code>update_adaptive_params</code> 命令落盘。
+              </p>
+            </CardContent>
+          )}
+        </Card>
+      )}
 
       {/* ===== v1.0 手动档 + 三档文字 ===== */}
 
-      {/* 顶部：当前激活档下拉框 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">手动档位</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            选择手动激活档。「自动切换难度」开启时此下拉框被禁用，仅展示只读读数；
-            出题 prompt 中的{" "}
-            <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
-              {"{{DIFFICULTY_DEMAND_*}}"}
-            </code>{" "}
-            占位符按实际生效档（mode=Auto → 自适应档 / mode=Manual → 本档）取值。
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Label htmlFor="difficulty-level">难度档位</Label>
-          {adaptiveMode === "auto" ? (
-            <>
-              <select
-                id="difficulty-level"
-                className={SELECT_CLASS}
-                value={difficulty.level}
-                disabled
-                aria-label="当前档位（自动档下只读）"
-              >
-                <option value="">已启用自动档</option>
-                {DIFFICULTY_LEVELS.map((lv) => (
-                  <option key={lv} value={lv}>
-                    {DIFFICULTY_LEVEL_LABELS[lv]}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-muted-foreground">
-                已启用自动档 · 当前档位随自适应能力自动调整；下方三档文字仍按手动档展示。
-              </p>
-            </>
-          ) : (
+      {/* 4. 手动档位下拉框：仅手动档展示（自动档下整卡隐藏） */}
+      {adaptiveMode === "manual" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">手动档位</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              选择手动激活档。出题 prompt 中的{" "}
+              <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
+                {"{{DIFFICULTY_DEMAND_*}}"}
+              </code>{" "}
+              占位符按本档取值；开启「自动切换难度」后本卡片隐藏，改由自适应档决定。
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Label htmlFor="difficulty-level">难度档位</Label>
             <select
               id="difficulty-level"
               className={SELECT_CLASS}
@@ -386,20 +368,33 @@ export function DifficultyPanel() {
                 </option>
               ))}
             </select>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* 三档文字编辑 */}
+      {/* 5. 三档难度文字编辑：总标题 + 三张分档卡片 */}
+      <div className="pt-2 space-y-1">
+        <Separator className="mb-4" />
+        <h3 className="text-lg font-semibold leading-none tracking-tight">
+          难度要求设置
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          三档难度不同题型的出题要求，实际生效档由上方
+          {adaptiveMode === "auto" ? "自适应状态" : "「手动档位」"}决定。
+        </p>
+      </div>
+
       {DIFFICULTY_LEVELS.map((lv) => (
         <Card key={lv}>
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg">
                 {DIFFICULTY_LEVEL_LABELS[lv]}
-                {difficulty.level === lv && (
+                {(adaptiveMode === "auto"
+                  ? adaptiveState.currentLevel === lv
+                  : difficulty.level === lv) && (
                   <span className="ml-2 text-xs font-normal text-muted-foreground">
-                    （手动激活）
+                    {adaptiveMode === "auto" ? "（自适应当前档）" : "（手动激活）"}
                   </span>
                 )}
               </CardTitle>
