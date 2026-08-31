@@ -1,10 +1,10 @@
 //! 测试会话编排：串联 LLM 题目生成 + TTS 音频合成 + 进度事件
 //!
 //! 流程：
-//! 1. 生成 session_id（UUID）
+//! 1. 调用方提供 `session_id` 与 `base_dir`
 //! 2. 调用 `question_generator` 生成 3 组题目
-//! 3. 调用 `audio_pipeline` 合成所有音频
-//! 4. 拼装 TestSession，保存到内存与缓存目录
+//! 3. 调用 `audio_pipeline` 合成所有音频（写入 `base_dir/audio/`）
+//! 4. 拼装 TestSession，写入 `base_dir/session.json`
 //! 5. 通过 Tauri Event 推送进度，前端可订阅
 
 use crate::models::config::AppConfig;
@@ -15,7 +15,7 @@ use crate::services::question_generator::{generate_q15_18, generate_q1_4, genera
 use crate::utils::path::session_cache_dir;
 use crate::utils::retry::RetryConfig;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tracing::{error, info};
@@ -46,7 +46,10 @@ pub struct ProgressPayload {
 
 pub const PROGRESS_EVENT: &str = "test-generation-progress";
 
-/// 完整预生成测试会话
+/// 完整预生成测试会话（向后兼容的便捷封装）：
+/// - 生成 UUID session_id
+/// - 创建 `<app_data_dir>/cache/{session_id}/` 作为 base_dir
+/// - 调用 `generate_full_session_at` 完成实际生成
 ///
 /// `effective_level` 由调用方（`commands::test_session::generate_test_session`）按
 /// mode（manual → `config.difficulty.level`；auto → `adaptive_state.current_level`）解析后传入，
@@ -56,16 +59,32 @@ pub async fn generate_full_session(
     config: &AppConfig,
     effective_level: &str,
 ) -> Result<TestSession, SessionError> {
+    let session_id = Uuid::new_v4().to_string();
+    let cache_dir = session_cache_dir(app, &session_id).map_err(SessionError::CacheDir)?;
+    generate_full_session_at(app, config, effective_level, &session_id, &cache_dir).await
+}
+
+/// 在指定 base_dir 下完整预生成一套测试会话（v1.1+：预生成题库复用此函数）
+///
+/// - `session_id` 由调用方生成（pregen worker 也用 UUID v4）；通过参数传入便于前端跨进程关联
+/// - `base_dir` 必须已存在；`audio/` 子目录由 `synthesize_all` 自动创建
+/// - 所有题目与音频写入 `base_dir/{session.json, audio/*.wav}`
+/// - 进度事件仍发 `test-generation-progress`；调用方（pregen worker）会在此基础上
+///   再发自己的 `pregen-progress` 事件，含 session_id / current / total 字段
+pub async fn generate_full_session_at(
+    app: &AppHandle,
+    config: &AppConfig,
+    effective_level: &str,
+    session_id: &str,
+    base_dir: &Path,
+) -> Result<TestSession, SessionError> {
     let http_client =
         build_client().map_err(|e| SessionError::HttpClient(e.to_string()))?;
-
-    let session_id = Uuid::new_v4().to_string();
-    let cache_dir: PathBuf =
-        session_cache_dir(app, &session_id).map_err(SessionError::CacheDir)?;
 
     info!(
         session_id = %session_id,
         effective_level = %effective_level,
+        base_dir = %base_dir.display(),
         "开始预生成测试会话"
     );
 
@@ -120,7 +139,7 @@ pub async fn generate_full_session(
         &long_dialogues,
         &monologue,
         &retell,
-        &cache_dir,
+        base_dir,
         config.audio.tts_silence_ms,
     )
     .await?;
@@ -128,7 +147,7 @@ pub async fn generate_full_session(
 
     // 5. 拼装 TestSession
     let session = TestSession {
-        session_id: session_id.clone(),
+        session_id: session_id.to_string(),
         short_dialogues,
         long_dialogues,
         monologue,
@@ -139,7 +158,7 @@ pub async fn generate_full_session(
     // 6. 序列化保存到磁盘，方便断电恢复与结算页查询
     let session_json = serde_json::to_string_pretty(&session)
         .map_err(|e| SessionError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-    std::fs::write(cache_dir.join("session.json"), session_json)?;
+    std::fs::write(base_dir.join("session.json"), session_json)?;
 
     emit_progress(app, "done", "预生成完成", 1.0);
     info!(session_id = %session_id, "测试会话预生成完成");

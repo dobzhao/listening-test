@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Card,
   CardContent,
@@ -10,66 +10,140 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Play, Settings as SettingsIcon, Headphones, Loader2, RefreshCw } from "lucide-react";
+import {
+  Play,
+  Settings as SettingsIcon,
+  Headphones,
+  Loader2,
+  Database,
+  X,
+} from "lucide-react";
 import { useSettingsStore } from "@/store/settings";
 import { useTestStore, STAGE_LABELS } from "@/store/test";
 import { useAdaptiveStore } from "@/store/adaptive";
+import { usePregenStore } from "@/store/pregen";
 import { useGenerationProgress } from "@/hooks/useGenerationProgress";
-import { confirm } from "@/store/confirm";
-import { DIFFICULTY_LEVEL_LABELS } from "@/types/config";
+import { DIFFICULTY_LEVEL_LABELS, type DifficultyLevel } from "@/types/config";
+import { toast } from "@/store/toast";
+import { startTestFromPregen } from "@/lib/tauri";
 
 export default function MainMenu() {
   const navigate = useNavigate();
+
   const loaded = useSettingsStore((s) => s.loaded);
   const loadError = useSettingsStore((s) => s.loadError);
   const llm = useSettingsStore((s) => s.config.llm);
   const tts = useSettingsStore((s) => s.config.tts);
   const stt = useSettingsStore((s) => s.config.stt);
+  const manualLevel = useSettingsStore((s) => s.config.difficulty.level);
 
   const stage = useTestStore((s) => s.stage);
   const session = useTestStore((s) => s.session);
-  const progress = useTestStore((s) => s.progress);
-  const error = useTestStore((s) => s.error);
-  const start = useTestStore((s) => s.start);
-  const loadSession = useTestStore((s) => s.load);
-  const resetSession = useTestStore((s) => s.reset);
+  const legacyProgress = useTestStore((s) => s.progress);
+  const setLegacySession = useTestStore((s) => s.setSession);
 
   const adaptiveMode = useAdaptiveStore((s) => s.mode);
-  const adaptiveState = useAdaptiveStore();
-  const manualLevel = useSettingsStore((s) => s.config.difficulty.level);
-  const effectiveLevel =
-    adaptiveMode === "auto" ? adaptiveState.currentLevel : manualLevel;
+  const adaptiveLevel = useAdaptiveStore((s) => s.currentLevel);
+  const effectiveLevel: DifficultyLevel =
+    adaptiveMode === "auto" ? adaptiveLevel : manualLevel;
+
+  // 题库摘要与进度（新增）
+  const pregenSummary = usePregenStore((s) => s.summary);
+  const pregenProgress = usePregenStore((s) => s.progress);
+  const pregenError = usePregenStore((s) => s.error);
+  const loadSummary = usePregenStore((s) => s.loadSummary);
+  const enqueue = usePregenStore((s) => s.enqueue);
+  const cancel = usePregenStore((s) => s.cancel);
+
+  const [pregenCount, setPregenCount] = useState(1);
 
   useGenerationProgress();
 
-  // 启动时尝试恢复已有会话
+  // 启动时拉题库摘要（兜底；App.tsx 也调过一次）
   useEffect(() => {
-    if (loaded && !session && stage === "idle") {
-      loadSession();
+    if (loaded && !usePregenStore.getState().loaded) {
+      loadSummary();
     }
-  }, [loaded, session, stage, loadSession]);
+  }, [loaded, loadSummary]);
+
+  // 兼容旧的 generation progress 事件路径（保留以防旧 generate_test_session 被触发）
+  useEffect(() => {
+    if (!pregenSummary) {
+      // 还没有拉过摘要时显示旧 stage 的 progress
+    }
+  }, [pregenSummary, legacyProgress]);
 
   const llmConfigured = !!llm.host && !!llm.model && !!llm.api_key;
   const ttsConfigured = !!tts.host && !!tts.model && !!tts.api_key;
   const sttConfigured = !!stt.host && !!stt.model && !!stt.api_key;
   const allConfigured = llmConfigured && ttsConfigured && sttConfigured;
 
-  const handleStart = async () => {
+  const unusedCount = pregenSummary?.unusedByLevel[effectiveLevel] ?? 0;
+  const totalUnused = pregenSummary?.unusedCount ?? 0;
+  const totalAll = pregenSummary?.totalCount ?? 0;
+  const generatingNow = pregenSummary?.generatingNow ?? false;
+
+  // 已就绪的 session 可能由旧的 generate_test_session 留下（MVP 期不应该，但兜底）
+  const bankEmpty = unusedCount === 0;
+
+  const levelLabel = DIFFICULTY_LEVEL_LABELS[effectiveLevel] ?? effectiveLevel;
+
+  const handleEnqueue = async () => {
+    if (pregenCount < 1 || pregenCount > 20) {
+      toast("请输入 1-20 之间的整数", { kind: "info" });
+      return;
+    }
     try {
-      await start();
-    } catch {
-      // error 已写入 store，用户可看到
+      await enqueue(pregenCount);
+    } catch (e) {
+      toast(`入队失败: ${String(e)}`, { kind: "error" });
     }
   };
 
-  const handleResetAndStart = async () => {
-    // 重置会话状态后重新生成（用于生成失败后重试）
-    if (await confirm("重新生成将丢弃当前已生成的题目与作答。继续？")) {
-      resetSession();
-      handleStart();
+  const handleCancel = async () => {
+    await cancel();
+    toast("已请求取消（当前套会跑完）", { kind: "info" });
+  };
+
+  const handleStartFromBank = async () => {
+    try {
+      const s = await startTestFromPregen();
+      setLegacySession(s);
+      navigate("/test");
+    } catch (e) {
+      toast(`开始测试失败: ${String(e)}`, { kind: "error" });
+      // 重新拉摘要以反映 used/unused 变化
+      void loadSummary();
     }
   };
+
+  // 进度文案（题库生成中）
+  const progressLabel = useMemo(() => {
+    if (pregenProgress) {
+      const total = pregenProgress.total;
+      const current = pregenProgress.current;
+      if (pregenProgress.stage === "started") {
+        return `正在生成第 ${current}/${total} 套 · ${pregenProgress.message}`;
+      }
+      return `第 ${current}/${total} 套 · ${pregenProgress.message || "生成中…"}`;
+    }
+    if (generatingNow) {
+      return "正在生成…";
+    }
+    return null;
+  }, [pregenProgress, generatingNow]);
+
+  // 进度条 value：worker 阶段会发 test-generation-progress（llm_q1_4 等）；
+  // pregen-progress 的 progress 字段在生成中可能没值（只有 done 时是 1.0），
+  // 这里取两者最大值让 UI 至少有反馈。
+  const progressValue = useMemo(() => {
+    if (pregenProgress?.progress != null) return pregenProgress.progress * 100;
+    if (legacyProgress?.progress != null) return legacyProgress.progress * 100;
+    return 0;
+  }, [pregenProgress, legacyProgress]);
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-slate-100">
@@ -95,24 +169,30 @@ export default function MainMenu() {
           </Card>
         ) : (
           <div className="grid gap-6 md:grid-cols-2">
-            {/* 开始测试卡片 */}
+            {/* 题库卡片 */}
             <Card className="md:col-span-2">
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2">
-                    <Play className="w-5 h-5" />
-                    开始测试
+                    <Database className="w-5 h-5" />
+                    题库
                   </CardTitle>
-                  {stage === "ready" && session ? (
-                    <Badge variant="success">题目已就绪</Badge>
+                  {generatingNow ? (
+                    <Badge variant="secondary">
+                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      生成中
+                    </Badge>
+                  ) : totalUnused > 0 ? (
+                    <Badge variant="success">题目就绪</Badge>
                   ) : allConfigured ? (
-                    <Badge variant="secondary">配置就绪</Badge>
+                    <Badge variant="outline">题库为空</Badge>
                   ) : (
                     <Badge variant="destructive">配置未完成</Badge>
                   )}
                 </div>
                 <CardDescription>
-                  完整模拟 19 道题目：1-14 题听后选择，15-19 题听后转述。
+                  当前难度「{levelLabel}」可用 <strong>{unusedCount}</strong> 套，
+                  题库共 {totalUnused} 套未使用 / {totalAll} 套总计
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -137,8 +217,8 @@ export default function MainMenu() {
                     configured={true}
                     detail={
                       adaptiveMode === "auto"
-                        ? `自动 | 当前档：${DIFFICULTY_LEVEL_LABELS[effectiveLevel]}`
-                        : `手动 | 当前档：${DIFFICULTY_LEVEL_LABELS[effectiveLevel]}`
+                        ? `自动 | 当前档：${levelLabel}`
+                        : `手动 | 当前档：${levelLabel}`
                     }
                   />
                 </div>
@@ -149,92 +229,103 @@ export default function MainMenu() {
                   </p>
                 )}
 
+                {/* 补充题库控件 */}
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="pregen-count" className="text-xs">
+                      补充套数
+                    </Label>
+                    <Input
+                      id="pregen-count"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={pregenCount}
+                      onChange={(e) =>
+                        setPregenCount(Math.max(1, Number(e.target.value) || 1))
+                      }
+                      disabled={generatingNow}
+                      className="w-24"
+                    />
+                  </div>
+                  <Button
+                    onClick={handleEnqueue}
+                    disabled={!allConfigured || generatingNow}
+                  >
+                    {generatingNow ? "生成中…" : `补充 ${pregenCount} 套（${levelLabel}）`}
+                  </Button>
+                  {generatingNow && (
+                    <Button variant="outline" onClick={handleCancel}>
+                      <X className="w-4 h-4 mr-1" />
+                      取消
+                    </Button>
+                  )}
+                </div>
+
                 {/* 进度展示 */}
-                {stage === "generating" && (
+                {generatingNow && progressLabel && (
                   <div className="space-y-2 rounded-md border bg-muted/30 p-3">
                     <div className="flex items-center gap-2 text-sm">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="font-medium">
-                        {progress
-                          ? STAGE_LABELS[progress.stage] ?? progress.message
-                          : "正在预生成题目与音频…"}
-                      </span>
+                      <span className="font-medium">{progressLabel}</span>
                     </div>
-                    <Progress
-                      value={(progress?.progress ?? 0) * 100}
-                      className="h-2"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {progress?.message ??
-                        "首次启动可能需要数十秒，后续会从本地缓存恢复。"}
-                    </p>
+                    <Progress value={progressValue} className="h-2" />
+                    {legacyProgress && (
+                      <p className="text-xs text-muted-foreground">
+                        阶段：{STAGE_LABELS[legacyProgress.stage as keyof typeof STAGE_LABELS] ??
+                          legacyProgress.message}
+                      </p>
+                    )}
                   </div>
                 )}
 
-                {stage === "error" && error && (
-                  <div className="space-y-2">
-                    <p className="text-sm text-destructive whitespace-pre-wrap">
-                      {error}
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleResetAndStart}
-                    >
-                      <RefreshCw className="w-3 h-3 mr-1" />
-                      清除并重新生成
-                    </Button>
-                  </div>
-                )}
-
-                {stage === "ready" && session && (
-                  <p className="text-sm text-emerald-600">
-                    已生成 {session.short_dialogues.length + session.long_dialogues.length * 2 + 2}
-                    {" "}道选择题 + 4 个填空 + 1 道转述
+                {pregenError && (
+                  <p className="text-sm text-destructive whitespace-pre-wrap">
+                    {pregenError}
                   </p>
                 )}
 
                 <Separator />
 
-                <div className="flex gap-2">
-                  <Button
-                    size="lg"
-                    className="flex-1"
-                    disabled={!allConfigured || stage === "generating"}
-                    onClick={handleStart}
-                  >
-                    {stage === "generating" ? (
-                      <>
-                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                        预生成中…
-                      </>
-                    ) : stage === "ready" && session ? (
-                      <>
-                        <Play className="w-5 h-5 mr-2" />
-                        重新生成
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-5 h-5 mr-2" />
-                        开始测试（19 题）
-                      </>
-                    )}
-                  </Button>
+                {/* 开始测试按钮 */}
+                <Button
+                  size="lg"
+                  className="w-full"
+                  disabled={
+                    !allConfigured ||
+                    bankEmpty ||
+                    generatingNow ||
+                    (stage === "generating" && !session)
+                  }
+                  onClick={handleStartFromBank}
+                >
+                  <Play className="w-5 h-5 mr-2" />
+                  开始测试（{unusedCount} 套 · 难度：{levelLabel}）
+                </Button>
 
-                  {stage === "ready" && session && (
-                    <Button
-                      size="lg"
-                      variant="default"
-                      onClick={() => navigate("/test")}
-                    >
-                      进入测试
-                    </Button>
-                  )}
-                </div>
-
+                {bankEmpty && allConfigured && !generatingNow && (
+                  <p className="text-xs text-muted-foreground text-center">
+                    当前难度（{levelLabel}）题库为空，请先补充题库
+                  </p>
+                )}
                 {!allConfigured && (
                   <p className="text-xs text-muted-foreground text-center">
                     请先在「设置」中完成模型服务配置
+                  </p>
+                )}
+
+                {/* 兼容旧 generate_test_session 残留的 session */}
+                {session && stage === "ready" && (
+                  <p className="text-xs text-amber-600 text-center">
+                    内存中存在上次的测试会话（来自旧版本），可前往
+                    <button
+                      type="button"
+                      className="underline mx-1"
+                      onClick={() => navigate("/test")}
+                    >
+                      /test
+                    </button>
+                    继续。
                   </p>
                 )}
               </CardContent>
