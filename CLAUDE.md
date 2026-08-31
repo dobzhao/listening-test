@@ -95,6 +95,7 @@ peiyuan/
 ├── src-tauri/                         # 后端 Rust
 │   ├── src/
 │   │   ├── commands/                  # Tauri commands
+│   │   │   ├── app_close.rs           # 关窗拦截：confirm_close_app / cancel_close_app（Rust 驱动，见 §4.4.14）
 │   │   │   ├── config.rs              # get_config / save_config / reset_config / restore_default_prompt / restore_default_timing / open_config_dir
 │   │   │   ├── llm.rs                 # test_llm_connection / generate_with_llm
 │   │   │   ├── tts.rs                 # test_tts_connection
@@ -180,6 +181,7 @@ peiyuan/
 | `RecorderGlobal` | 含 `Arc<RecorderState>` | 整个 App | 录音状态（worker 线程） |
 | `AudioPlaybackState` | 含 `Arc<Mutex<bool>>` | 整个 App | 音频播放状态标记 |
 | `AudioPlaybackState.active_stop_flag` | `Mutex<Option<Arc<AtomicBool>>>` | 整个 App | `skip_to_next` 中断当前 rodio 播放（§4.4.9） |
+| `CloseGuardState` | `prompt_pending: AtomicBool` | 整个 App | 关窗拦截运行时状态：确认框是否已弹出。逃生阀：弹着时再点 X 直接放行（详见 §4.4.14） |
 | `FlowStateInner.skip_requested` | `Arc<AtomicBool>` | 单次 run_* | 「下一题」信号位，interruptible_sleep 轮询 |
 | `FlowStateInner.recording_completed` | `Arc<AtomicBool>` | 单次 run_* | 「提前结束录音」信号位，interruptible_sleep 轮询 |
 | `FlowStateInner.group_membership` | `HashMap<u32, u32>` | 单次 run_* | 内部：题号 → 组号（用于 5-12 题共享 ANSWERING 时段） |
@@ -201,6 +203,7 @@ peiyuan/
 | `adaptive-level-changed` | `{from: String, to: String, ability: f64, trend: f64, update_count: u64}` | **每次成功的非 retest 自适应更新后**发射（不论档位是否翻转），前端用于设置界面（DifficultyPanel）同步刷新 ability / trend / update_count。**判断档位是否真正翻转**应通过 `score_full_test` 返回的 `TestResult.adaptive.level_before/level_after`，不要依赖事件名 |
 | `adaptive-state-reset` | `{new_level: String, ability: f64, trend: f64}` | 用户点击「重置自适应状态」后发射 |
 | `test-score-progress` | `{stage, message}`（`stage ∈ {"mcq","blanks","retell","done"}`） | **已定义但当前未发射**（详见 §六） |
+| `app-close-requested` | `{reason: "generating" \| "testing"}` | 用户点 X，Rust 判定有进行中的任务（生成中 / 答题中），`prevent_close` 后 emit。前端 `CloseGuard` 据此弹应用内确认框。<br>**⚠️ 绝不能监听 `tauri://close-requested`** —— Tauri 一旦发现该事件有 JS 监听就无条件 `prevent_close`（详见 §4.4.14） |
 
 ### 4.4 关键设计决策
 
@@ -294,6 +297,56 @@ cpal::Stream 标记为 `!Send + !Sync`，无法在 Tauri State 中直接保存�
   - `DifficultyDemand` 三档文字不变；UI 在「设置 → 难度」Tab 同时展示手动档（可编辑或 disabled）与自适应档（只读）
   - `inject_difficulty_vars` 调用方改为读取 `effective_level()`，不再是裸 `config.difficulty.level`（**Prompt 模板本体不变**，仅改变量来源；详见 Spec.md §5.5）
 
+#### 4.4.14 关窗拦截（Rust 驱动）
+
+**架构**：拦截决策放在 `src-tauri/src/commands/app_close.rs` + `lib.rs::on_window_event`，
+前端 `src/components/CloseGuard.tsx` 只负责显示确认框。
+
+**为什么不能在前端用 `Window.onCloseRequested`**：
+Tauri 2 的 `tauri-2.11.5/src/manager/window.rs:170` 在收到 `CloseRequested` 时，
+只要 `has_js_listener(WINDOW_CLOSE_REQUESTED_EVENT)` 为 true 就**无条件** `api.prevent_close()`。
+于是原生关窗被永久禁用，唯一出路变成前端主动调 `destroy()`。而
+`plugin:window|destroy` 受 ACL 管控——`core:window:default` 只含 28 条只读 getter，
+不含 `allow-destroy`/`allow-close`——每次 `destroy()` 都被驳回，
+但驳回错误只在 webview console 出现，不落盘日志，所以极难发现。
+旧版 `CloseGuard.tsx` 即因此**关不掉窗口**。
+
+**为什么能跑通**：
+1. 不在前端注册 `tauri://close-requested` 监听 → Tauri 不会自动 `prevent_close`
+2. Rust 端 `lib.rs::on_window_event` 收到 `CloseRequested` 后：
+   - 调 `services::pregen::is_generating(app)`（同步：worker 锁 try_lock + pending 原子读）
+   - 调 `FlowStateContainer::is_running()`（同步：inner 锁 try_lock，fail-open）
+   - 都 false → **不**调 `prevent_close`，原生关窗，零 ACL 依赖
+   - 任一 true → `prevent_close` + emit 自定义事件 `app-close-requested`（payload: `{reason}`）
+3. 前端 `CloseGuard.tsx` `listen("app-close-requested")`（自定义名，不是 `tauri://`），
+   弹应用内 `ConfirmDialog`（`src/components/ui/confirm-dialog.tsx`，已全局挂载，
+   正是项目为规避 WKWebView `window.confirm` 不可用而引入）。用户选「确认关闭」→
+   `confirm_close_app` → Rust `pregen_svc::request_cancel` + `reset_test_flow`
+   （abort run_flow + 置 rodio `active_stop_flag`）+ `Window::destroy()`（Rust 直接调，
+   不受 IPC ACL 管控）。Rust `destroy` 而非 `app.exit`，让事件循环正常结束、`run()`
+   正常返回，`lib.rs:71` 的 `_log_guard` 才会 drop 并 flush 日志。
+
+**两道保险**：
+- 前端异常（确认框 store 异常、IPC 失败等）：CloseGuard 的 try/catch 兜底视为「已确认」直接关窗。
+- 用户逃生阀：`CloseGuardState.prompt_pending`（`AtomicBool`）。确认框弹着时再点一次 X，
+  Rust 端 `swap(true)` 返回旧值 `true` → 放行第二次关闭请求。
+
+**新增 commands**（`src-tauri/src/commands/app_close.rs`）：
+- `confirm_close_app(app, audio, flow)` —— 用户确认后：取消预生成队列 + 重置测试流程 + `destroy("main")`
+- `cancel_close_app(guard)` —— 用户取消后：清 `prompt_pending` 标志位
+
+**新增事件**：`app-close-requested`（payload `{reason: "generating" | "testing"}`）
+
+**修改文件**：
+- `src-tauri/src/services/pregen.rs` —— 抽出 `pub fn is_generating(app: &AppHandle) -> bool`（同步）供 `on_window_event` 调用；`build_summary` 复用之
+- `src-tauri/src/services/test_flow.rs` —— `FlowStateInner::is_running` + `FlowStateContainer::is_running`（`try_lock` + fail-open）
+- `src-tauri/src/commands/test_flow.rs` —— `start_test_flow` 的防重复启动检查改为调用 `guard.is_running()` 共享谓词
+- `src-tauri/src/commands/app_close.rs` —— 新建
+- `src-tauri/src/lib.rs` —— `.manage(CloseGuardState::default())` + `.on_window_event(...)` + 注册 commands
+- `src/components/CloseGuard.tsx` —— 重写：监听自定义事件 + 复用 `ConfirmDialog` + 异常兜底
+- `src/lib/tauri.ts` —— 新增 `confirmCloseApp` / `cancelCloseApp` / `onAppCloseRequested` 封装
+
+**`capabilities/default.json` 不变**：本方案不依赖任何 window 变更或 dialog ACL。
 
 ### 4.5 模块分层
 

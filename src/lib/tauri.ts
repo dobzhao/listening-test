@@ -478,3 +478,35 @@ export async function onPregenFailed(
     handler(e.payload)
   );
 }
+
+// ===== 关窗拦截 =====
+//
+// ⚠️ 这里的事件名是 **自定义** 的 `app-close-requested`，**不是**
+// `tauri://close-requested`。后者只要前端注册监听，Tauri 就会无条件
+// `prevent_close`，导致窗口只能由前端主动 destroy 关掉，而 destroy 还要
+// ACL 授权（`core:window:allow-destroy`，默认不在）—— 这正是旧
+// CloseGuard.tsx 关不掉窗口的根因。详见 src-tauri/src/commands/app_close.rs。
+
+export type CloseReason = "generating" | "testing";
+
+export interface CloseRequestedPayload {
+  reason: CloseReason;
+}
+
+/** 用户在确认框点「确认关闭」：取消生成 + abort 测试流程 + 关窗 */
+export async function confirmCloseApp(): Promise<void> {
+  await invoke("confirm_close_app");
+}
+
+/** 用户在确认框点「继续」：清标志位，下次再点 X 还能再弹 */
+export async function cancelCloseApp(): Promise<void> {
+  await invoke("cancel_close_app");
+}
+
+export async function onAppCloseRequested(
+  handler: (payload: CloseRequestedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<CloseRequestedPayload>("app-close-requested", (e) =>
+    handler(e.payload)
+  );
+}

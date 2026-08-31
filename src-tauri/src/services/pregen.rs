@@ -502,18 +502,30 @@ async fn resolve_effective_level(app: &AppHandle) -> Result<(AppConfig, String),
 
 // ===== 摘要（异步，因为 pool 是 tokio RwLock） =====
 
+/// 是否有 worker 在跑或队列非空。
+///
+/// **同步**（不碰 `pool`，只读 worker 锁与原子计数），因此可以在
+/// `lib.rs` 的 `on_window_event` 主线程闭包里直接调用 —— `build_summary`
+/// 因为要 `await` 读 `pool` 而不行。
+///
+/// worker 锁竞争时保守返回 `true`（视为生成中），与 `build_summary` 语义一致。
+pub fn is_generating(app: &AppHandle) -> bool {
+    let rt = app.state::<crate::models::pregen::PregenPoolRuntime>();
+    let worker_alive = rt.worker.try_lock().map(|g| g.is_some()).unwrap_or(true);
+    worker_alive || rt.pending_count.load(Ordering::SeqCst) > 0
+}
+
 /// 构造 PregenSummary：必须 async（读 pool 需 await）
 pub async fn build_summary(app: &AppHandle) -> PregenSummary {
+    let generating_now = is_generating(app);
     let rt = app.state::<crate::models::pregen::PregenPoolRuntime>();
-    let generating_now = rt.worker.try_lock().map(|g| g.is_some()).unwrap_or(true);
     let current_index = rt.current_index.load(Ordering::SeqCst);
     let current_total = rt.current_total.load(Ordering::SeqCst);
     let last_error = rt.last_error.lock().unwrap().clone();
-    let pending = rt.pending_count.load(Ordering::SeqCst);
     let pool = rt.pool.read().await;
     PregenSummary::from_state(
         &pool,
-        generating_now || pending > 0,
+        generating_now,
         current_index,
         current_total,
         last_error,

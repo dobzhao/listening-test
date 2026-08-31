@@ -89,6 +89,16 @@ pub struct FlowStateInner {
     pub current_task: Option<JoinHandle<()>>,
 }
 
+impl FlowStateInner {
+    /// 流程是否正在运行：已启动（`state` 非 None）且未结束。
+    ///
+    /// 调用方各自决定加锁策略，见 `FlowStateContainer::is_running`
+    /// 与 `commands/test_flow.rs::start_test_flow`。
+    pub fn is_running(&self) -> bool {
+        self.state.is_some() && !self.finished
+    }
+}
+
 impl Default for FlowStateInner {
     fn default() -> Self {
         Self {
@@ -119,6 +129,20 @@ impl Default for FlowStateContainer {
 }
 
 impl FlowStateContainer {
+    /// 流程是否正在运行。锁竞争时返回 `false`（fail-open）：这是关窗拦截
+    /// （`lib.rs::on_window_event`）的判定入口，宁可放行关窗，也不能因为
+    /// 一把瞬时占用的锁把用户困在关不掉的窗口里。
+    ///
+    /// `start_test_flow` 的防重复启动检查用的是阻塞 `lock()` + 出错即拒绝
+    /// （见 `commands/test_flow.rs`），两处共用 `FlowStateInner::is_running`
+    /// 这个谓词，但各自保留合适的加锁策略。
+    pub fn is_running(&self) -> bool {
+        self.inner
+            .try_lock()
+            .map(|g| g.is_running())
+            .unwrap_or(false)
+    }
+
     /// Q19 用户点击"提前结束录音"时由前端命令调用：
     /// 唤醒 `finish_recording_phases` 中的 `interruptible_sleep`，立即进入评分阶段。
     pub fn notify_recording_completed(&self) {
