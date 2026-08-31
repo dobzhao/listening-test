@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "英语听力练习",
+  "productName": "english-listening-practice",
   "version": "0.1.0",
   "identifier": "com.peiyuan.desktop",
   "build": {
@@ -33,12 +33,20 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Education",
+    "shortDescription": "英语听力练习",
+    "longDescription": "基于 LLM 实时生成题目的跨平台英语听力练习程序，包含 19 道听说题。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "templates/peiyuan.desktop"
+      }
+    }
   }
 }

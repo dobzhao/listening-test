@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=英语听力练习
+GenericName=英语听力练习
+Comment={{comment}}
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories={{categories}};
