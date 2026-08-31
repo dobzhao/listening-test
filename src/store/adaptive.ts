@@ -92,14 +92,30 @@ export const useAdaptiveStore = create<AdaptiveState>((set, get) => ({
     const prevMode = get().mode;
     try {
       const snap = await cmdSetAdaptiveMode(auto, initialLevel);
-      // 服务端 setAdaptiveMode 已写 config 并 emit 事件；这里仅同步本地 store
+      const nextMode: AdaptiveMode = auto ? "auto" : "manual";
+
+      // 1. 同步 adaptive store 自身的运行时态
       set({
-        mode: auto ? "auto" : "manual",
+        mode: nextMode,
         abilityScore: snap.ability_score,
         trend: snap.trend,
         currentLevel: snap.current_level,
         updateCount: snap.update_count,
       });
+
+      // 2. 同步 settings store 的 difficulty.mode 镜像：
+      //    避免后续 persist()（用户在 LLM 设置页改 prompt 后点「保存配置」）把
+      //    陈旧的 mode 整包发回后端，导致磁盘 mode 被反向覆盖。
+      const settingsState = useSettingsStore.getState();
+      if (settingsState.loaded && settingsState.config.difficulty.mode !== nextMode) {
+        useSettingsStore.setState((s) => ({
+          config: {
+            ...s.config,
+            difficulty: { ...s.config.difficulty, mode: nextMode },
+          },
+        }));
+      }
+
       // auto→manual 时给提示（后端会把 update_count 一起清零）；manual→auto 时静默
       // （auto 状态下由 DifficultyPanel 自己弹 toast）
       if (prevMode === "auto" && !auto) {
@@ -107,6 +123,10 @@ export const useAdaptiveStore = create<AdaptiveState>((set, get) => ({
       }
     } catch (e) {
       console.error("[adaptive] setMode 失败", e);
+      // 后端 save_config_to_disk 失败时回滚 UI，避免 Switch 与磁盘不一致
+      if (get().mode !== prevMode) {
+        set({ mode: prevMode });
+      }
       toast(`切换自适应模式失败: ${String(e)}`, { kind: "error" });
     }
   },

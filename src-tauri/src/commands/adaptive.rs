@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// 启动注册的全局自适应状态（运行时态，独立于 `ConfigState`）
 ///
@@ -143,9 +143,11 @@ pub async fn set_adaptive_mode(
         cfg_guard.clone()
     };
 
-    // 同步落盘 config.json
+    // 同步落盘 config.json：失败必须透传 Err，前端会 toast 报错并回滚 mode，
+    // 避免出现「内存已切换、磁盘未更新」导致的「重启后开关回弹」bug。
     if let Err(e) = crate::commands::config::save_config_to_disk(&app, &updated_config) {
-        warn!(error = %e, "set_adaptive_mode: 保存 config.json 失败");
+        error!(error = %e, "set_adaptive_mode: 保存 config.json 失败");
+        return Err(format!("保存自适应模式到 config.json 失败: {e}"));
     }
 
     // 2. auto → manual 时硬重置到当前手动档（清零 update_count）
