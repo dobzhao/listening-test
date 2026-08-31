@@ -79,7 +79,7 @@ pub async fn start_test_flow(
             .inner
             .lock()
             .map_err(|e| format!("锁读取失败: {e}"))?;
-        if guard.state.is_some() && !guard.finished {
+        if guard.is_running() {
             warn!(
                 "start_test_flow: 流程已在运行中，session_id={}，拒绝重复启动",
                 session.session_id

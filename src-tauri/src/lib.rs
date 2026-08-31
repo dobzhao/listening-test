@@ -8,6 +8,7 @@ pub mod services;
 pub mod utils;
 
 use commands::adaptive::AdaptiveStateHandle;
+use commands::app_close::CloseGuardState;
 use commands::audio::AudioPlaybackState;
 use commands::config::ConfigState;
 use models::pregen::PregenPoolRuntime;
@@ -79,6 +80,17 @@ pub fn run() {
         .manage(RecorderGlobal::default())
         .manage(AudioPlaybackState::default())
         .manage(PregenPoolRuntime::default())
+        .manage(CloseGuardState::default())
+        // 关窗拦截：空闲时不拦截（原生关窗，零 ACL 依赖）；生成中 / 答题中则
+        // prevent_close 并 emit `app-close-requested` 让前端弹应用内确认框。
+        // 详见 commands/app_close.rs 模块文档。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if commands::app_close::intercept_close(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(|app| {
             // v1.1+ 自适应状态启动加载：从 adaptive_state.json 读取（含损坏恢复），
             // 再注入 AdaptiveStateHandle，替代 Default 占位的 junior_high。
@@ -160,6 +172,9 @@ pub fn run() {
             commands::pregen::enqueue_pregen,
             commands::pregen::cancel_pregen,
             commands::pregen::start_test_from_pregen,
+            // 关窗拦截
+            commands::app_close::confirm_close_app,
+            commands::app_close::cancel_close_app,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
