@@ -52,6 +52,23 @@ pub async fn start_test_flow(
         guard.clone().ok_or_else(|| "尚未生成测试会话，请先预生成".to_string())?
     };
 
+    // 防御性：如果上一次任务残留（理论上 reset_test_flow 应已 abort），
+    // 这里再 abort 一次，避免与新任务并发运行互相污染 state / 答案。
+    {
+        let mut guard = flow
+            .container
+            .inner
+            .lock()
+            .map_err(|e| format!("锁读取失败: {e}"))?;
+        if let Some(handle) = guard.current_task.take() {
+            warn!(
+                "start_test_flow: 检测到残留 run_flow 任务，防御性 abort session_id={}",
+                session.session_id
+            );
+            handle.abort();
+        }
+    }
+
     // 防止重复启动：flow 已经处于 running 状态时直接拒绝。
     // 背景：ResultPage "重新测试" 流程会先 reset_test_flow 再 start_test_flow。
     // 如果前端在尚未收到事件时再次点 "开始测试"，第二次调用会再 spawn 一份 run_flow，
@@ -184,26 +201,54 @@ pub struct AnswerSetDto {
 }
 
 /// 重置测试流程状态（用户重新开始时调用）
+///
+/// 不仅清空 `FlowStateContainer` 内的标志，还：
+/// 1. 取出 `current_task` 的 JoinHandle 并 `abort()`，强制中止仍在运行的 `run_flow` 异步任务
+///    （不 abort 的话旧任务会继续调用 `emit_state`，把 `state` 重新写成旧题号污染下一次测试）
+/// 2. 置 `AudioPlaybackState.active_stop_flag = true`，让 rodio 播放线程立即退出
 #[tauri::command]
 pub fn reset_test_flow(
     flow: tauri::State<'_, FlowGlobal>,
+    audio: tauri::State<'_, AudioPlaybackState>,
 ) -> Result<(), String> {
-    let mut guard = flow
-        .container
-        .inner
-        .lock()
-        .map_err(|e| format!("锁写入失败: {e}"))?;
-    let cleared_answers = guard.answers.len();
-    guard.answers.clear();
-    guard.state = None;
-    guard.finished = false;
-    guard.skip_requested.store(false, Ordering::Relaxed);
-    guard.recording_completed.store(false, Ordering::Relaxed);
-    // correct_answers / audio_paths 由 init_container_from_session 重新填充
-    info!(
-        "reset_test_flow: 已清空 {} 个答案记录，状态已重置（包含 finished / skip / recording 标志）",
-        cleared_answers
-    );
+    let aborted_task = {
+        let mut guard = flow
+            .container
+            .inner
+            .lock()
+            .map_err(|e| format!("锁写入失败: {e}"))?;
+        let cleared_answers = guard.answers.len();
+        guard.answers.clear();
+        guard.state = None;
+        guard.finished = false;
+        guard.skip_requested.store(false, Ordering::Relaxed);
+        guard.recording_completed.store(false, Ordering::Relaxed);
+        // 取出旧任务的 handle；guard 在 drop 时释放锁
+        let handle = guard.current_task.take();
+        // correct_answers / audio_paths 由 init_container_from_session 重新填充
+        info!(
+            "reset_test_flow: 已清空 {} 个答案记录，状态已重置（包含 finished / skip / recording 标志）",
+            cleared_answers
+        );
+        handle
+    };
+
+    // 锁外 abort：abort() 本身只是设置一个标志，非阻塞。
+    // run_flow 会在下一个 .await 点（interruptible_sleep / play_audio）抛出 Cancelled，
+    // spawn 闭包匹配 Err 分支，发一条 test-flow-finished{ok=false}。
+    // 此刻 TestPage 已经 navigate 卸载，useTestFlowEvents 已取消订阅，无副作用。
+    if let Some(handle) = aborted_task {
+        handle.abort();
+        info!("reset_test_flow: 已 abort 上一个 run_flow 任务");
+    }
+
+    // 停 rodio 播放（如果正在播放）。active_stop_flag 由 play_audio 设置为 Some(stop_flag)，
+    // 置 true 后 play_wav_blocking 在下一个切片检查到并退出。
+    if let Some(stop_flag) = audio.active_stop_flag.lock().unwrap().clone() {
+        stop_flag.store(true, Ordering::Relaxed);
+        info!("reset_test_flow: 已置 audio.stop_flag 停止 rodio 播放");
+    }
+
     Ok(())
 }
 

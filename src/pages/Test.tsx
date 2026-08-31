@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Loader2, Play, FileText, SkipForward } from "lucide-react";
 import { useTestStore } from "@/store/test";
+import { useResultStore } from "@/store/result";
 import { confirm } from "@/store/confirm";
 import {
   PHASE_LABELS,
@@ -31,6 +32,7 @@ import {
   skipToNext,
   startTestFlow,
   getFlowState,
+  resetTestFlow,
 } from "@/lib/tauri";
 
 /** 判断当前段对应题目的作答是否完整（用于"下一题"按钮的 enabled 计算） */
@@ -106,6 +108,52 @@ export default function TestPage() {
 
   // 录音
   const recorder = useRecorder();
+
+  // 放弃本次测试并返回主菜单：完全清理后端流程 + 所有前端 store，
+  // 避免后端 run_flow 继续运行、音频继续播放、下次进入直接跳结算页。
+  // 与 Result.tsx::handleBackToMenu 同模式（commit 8273b1a），后端
+  // reset_test_flow 现在会自己 abort run_flow 任务 + 停 rodio 音频，
+  // 所以这里不再需要先调 skipToNext()。
+  const handleAbandon = async () => {
+    if (!(await confirm("确认放弃本次测试？所有作答将被清空。"))) {
+      console.log("[Test] handleAbandon: 用户取消");
+      return;
+    }
+    console.log("[Test] handleAbandon: 用户确认放弃");
+
+    // 1. 若正在录音，先收尾（stopRecording + submit_answer(q19) + notifyRecordingCompleted）
+    if (recorder.isRecording) {
+      try {
+        await recorder.stopLocalRecording();
+        console.log("[Test] handleAbandon: 已停止录音");
+      } catch (e) {
+        console.error("[Test] handleAbandon: 停止录音失败", e);
+      }
+    }
+
+    // 2. 先导航，让 TestPage 卸载（避免 useEffect 在重置后又跑一遍）
+    navigate("/");
+
+    // 3. 后端：reset_test_flow 内部会 abort 旧 run_flow 任务 + 停 rodio 音频
+    try {
+      await resetTestFlow();
+      console.log("[Test] handleAbandon: reset_test_flow 成功");
+    } catch (e) {
+      console.error("[Test] handleAbandon: reset_test_flow 失败", e);
+    }
+
+    // 4. 前端：清空三个 store（与 Result.tsx::handleBackToMenu 一致）
+    try {
+      await reset(); // useTestStore.reset → clear_test_session
+      console.log("[Test] handleAbandon: useTestStore.reset 成功");
+    } catch (e) {
+      console.error("[Test] handleAbandon: useTestStore.reset 失败", e);
+    }
+    useResultStore.getState().reset();
+    useResultStore.getState().setIsRetest(false);
+    useTestFlowStore.getState().reset();
+    console.log("[Test] handleAbandon: 前端 store 已重置");
+  };
 
   // 计算当前应展示的题目
   const currentDialogue = useMemo(() => {
@@ -288,12 +336,7 @@ export default function TestPage() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={async () => {
-              if (await confirm("确认放弃本次测试？所有作答将被清空。")) {
-                reset();
-                navigate("/");
-              }
-            }}
+            onClick={handleAbandon}
           >
             放弃并返回主菜单
           </Button>
@@ -388,12 +431,7 @@ export default function TestPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={async () => {
-            if (await confirm("确认放弃本次测试？所有作答将被清空。")) {
-              reset();
-              navigate("/");
-            }
-          }}
+          onClick={handleAbandon}
         >
           放弃并返回主菜单
         </Button>

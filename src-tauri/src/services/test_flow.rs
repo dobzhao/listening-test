@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
@@ -79,6 +80,13 @@ pub struct FlowStateInner {
     pub skip_requested: Arc<AtomicBool>,
     /// 用户在 Q19 点击"提前结束录音"时设置；让 RECORDING 阶段 sleep 提前返回
     pub recording_completed: Arc<AtomicBool>,
+    /// 当前正在跑的 run_flow 任务的 JoinHandle。
+    /// `spawn_test_flow` 时写入，`reset_test_flow` 时取出并 `abort()`。
+    /// 任务在下一个 `.await` 点（`interruptible_sleep` / `play_audio` / `spawn_blocking.await`）
+    /// 抛出 `JoinError::Cancelled`，run_flow 立即退出。
+    /// 没有它的话旧任务的 `emit_state` 会持续污染 FlowStateContainer.state，
+    /// 导致前端的「放弃 → 重做」流程读到旧 question_index。
+    pub current_task: Option<JoinHandle<()>>,
 }
 
 impl Default for FlowStateInner {
@@ -92,6 +100,7 @@ impl Default for FlowStateInner {
             audio_paths: HashMap::new(),
             skip_requested: Arc::new(AtomicBool::new(false)),
             recording_completed: Arc::new(AtomicBool::new(false)),
+            current_task: None,
         }
     }
 }
@@ -175,8 +184,11 @@ pub fn spawn_test_flow(
     // 避免上一轮残留下一次进入流程时被识别成跳过/录音完成
     container.reset_recording_completed();
 
-    tokio::spawn(async move {
-        let result = run_flow(app.clone(), container.clone(), session, timing).await;
+    // 先 clone 一份给 tokio 闭包（async move 会把外部变量 move 进闭包），
+    // 闭包运行过程中仍然需要 container 来 emit flow_finished 和更新 finished。
+    let container_for_task = container.clone();
+    let handle = tokio::spawn(async move {
+        let result = run_flow(app.clone(), container_for_task.clone(), session, timing).await;
         match result {
             Ok(()) => {
                 info!("测试流程完成");
@@ -188,7 +200,7 @@ pub fn spawn_test_flow(
             Err(e) => {
                 error!(error = %e, "测试流程异常终止");
                 {
-                    let mut guard = container.inner.lock().unwrap();
+                    let mut guard = container_for_task.inner.lock().unwrap();
                     guard.finished = true;
                 }
                 let _ = app.emit(
@@ -198,6 +210,9 @@ pub fn spawn_test_flow(
             }
         }
     });
+    // 保存 JoinHandle，让 reset_test_flow 能中止这个任务。
+    // 外部的 container 仍是 owner（FlowStateContainer 内部是 Arc，clone 廉价）。
+    container.inner.lock().unwrap().current_task = Some(handle);
 }
 
 async fn run_flow(
