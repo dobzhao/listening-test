@@ -64,7 +64,15 @@ export const usePregenStore = create<PregenState>((set, get) => ({
     }
   },
 
-  setProgress: (p) => set({ progress: p }),
+  setProgress: (p) => {
+    set({ progress: p });
+    // worker 每完成一套就发 stage="done"（此时新条目已加入池中并落盘），
+    // 顺手刷新一次摘要，让主菜单按钮上的「剩余套数」实时增长，
+    // 不必等 pregen-finished（只在 worker 跑完全部入队条目后才发）。
+    if (p.stage === "done") {
+      void get().loadSummary();
+    }
+  },
   setFinished: () => {
     set({ progress: null });
     void get().loadSummary();
