@@ -14,6 +14,7 @@ import { Loader2, Play, FileText, SkipForward } from "lucide-react";
 import { useTestStore } from "@/store/test";
 import { useResultStore } from "@/store/result";
 import { confirm } from "@/store/confirm";
+import { toast } from "@/store/toast";
 import {
   PHASE_LABELS,
   useTestFlowStore,
@@ -33,6 +34,7 @@ import {
   startTestFlow,
   getFlowState,
   resetTestFlow,
+  activateTestFromPregen,
 } from "@/lib/tauri";
 
 /** 判断当前段对应题目的作答是否完整（用于"下一题"按钮的 enabled 计算） */
@@ -443,6 +445,37 @@ export default function TestPage() {
 function TestStartCard({ onStart }: { onStart: () => Promise<unknown> }) {
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
+  const resetSession = useTestStore((s) => s.reset);
+
+  // 进入测试：先把题库条目从 pregen/ 搬到 cache/、标 Used、补题（这一步才真正"占用"题目），
+  // 然后再启动测试流程（start_test_flow 读 SessionState 拿已激活的 session）。
+  // 任一步失败都不应误导用户 —— 给出 toast 后 busy=false 让其重试。
+  const handleStart = async () => {
+    setBusy(true);
+    try {
+      await activateTestFromPregen();
+      await onStart();
+    } catch (e) {
+      console.error("[Test] handleStart: 启动失败", e);
+      toast(`启动测试失败: ${String(e)}`, { kind: "error" });
+      setBusy(false);
+    }
+  };
+
+  // 返回主菜单：清掉主菜单 pick 后留在 SessionState 的占位条目，避免下次再 pick 时与旧 session 冲突。
+  // 这一步**不会**触碰 pregen/ 题库目录 —— 因为题目从未 activate，题库条目原封不动地留在 pool 里。
+  const handleReturn = async () => {
+    try {
+      await resetSession(); // useTestStore.reset → clear_test_session: 清 SessionState + 删除 cache/{uuid}/
+    } catch (e) {
+      console.error("[Test] handleReturn: clear_test_session 失败", e);
+    }
+    useResultStore.getState().reset();
+    useResultStore.getState().setIsRetest(false);
+    useTestFlowStore.getState().reset();
+    navigate("/");
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center p-8 bg-slate-50">
       <Card className="max-w-md w-full">
@@ -461,14 +494,7 @@ function TestStartCard({ onStart }: { onStart: () => Promise<unknown> }) {
             className="w-full"
             size="lg"
             disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await onStart();
-              } finally {
-                setBusy(false);
-              }
-            }}
+            onClick={handleStart}
           >
             {busy ? (
               <>
@@ -485,7 +511,7 @@ function TestStartCard({ onStart }: { onStart: () => Promise<unknown> }) {
           <Button
             variant="ghost"
             className="w-full"
-            onClick={() => navigate("/")}
+            onClick={handleReturn}
           >
             返回主菜单
           </Button>

@@ -310,6 +310,20 @@ pub fn load_session_json(app: &AppHandle, session_id: &str) -> Result<TestSessio
     serde_json::from_str(&text).map_err(|e| format!("解析 session.json 失败: {e}"))
 }
 
+/// 从 `pregen/{uuid}/session.json` 加载 TestSession（题库池中的元数据，audio_paths 指向 pregen/）
+///
+/// 用法：`pick_test_from_pregen` 在不动文件状态的前提下把题库条目加载到 SessionState。
+/// `activate_one` 之后 audio_paths 会被重写到 cache/，再走 `load_session_json`。
+pub fn load_pregen_session_json(
+    app: &AppHandle,
+    session_id: &str,
+) -> Result<TestSession, String> {
+    let dir = pregen_dir(app, session_id)?;
+    let text = std::fs::read_to_string(dir.join("session.json"))
+        .map_err(|e| format!("读取 pregen session.json 失败: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("解析 pregen session.json 失败: {e}"))
+}
+
 // ===== worker =====
 
 /// 确保后台 worker 在跑：若已存在则复用，否则 spawn

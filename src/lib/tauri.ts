@@ -448,11 +448,26 @@ export async function cancelPregen(): Promise<void> {
 }
 
 /**
- * 从题库激活最早一条 unused（按当前 effective_level 过滤）并进入测试。
- * 后端会自动 enqueue(1) 在后台再补 1 套。
+ * 从题库挑选最早一条 unused（按当前 effective_level 过滤）并加载到 SessionState。
+ *
+ * **不会**移动文件、**不会**把条目标为 Used、**不会**触发 enqueue(1) 补题。
+ * 用于主菜单「开始测试（X 套 · 难度：Y）」按钮 —— 仅是"预选"，用户在
+ * "准备开始测试"界面若点「返回主菜单」则题目原封不动地留在题库池中。
+ *
+ * 真正激活（move 文件 + 标 Used + 补题）需再调用 `activateTestFromPregen`。
  */
-export async function startTestFromPregen(): Promise<TestSession> {
-  return invoke<TestSession>("start_test_from_pregen");
+export async function pickTestFromPregen(): Promise<TestSession> {
+  return invoke<TestSession>("pick_test_from_pregen");
+}
+
+/**
+ * 激活 SessionState 里已 picked 的题库条目（move pregen/{uuid}/ → cache/{uuid}/、
+ * 标 Used + save_index、enqueue(1) 补题）。
+ *
+ * 用于「准备开始测试」界面点「开始测试」按钮 —— 只有这一步才会让题目从题库池中"离开"。
+ */
+export async function activateTestFromPregen(): Promise<TestSession> {
+  return invoke<TestSession>("activate_test_from_pregen");
 }
 
 export async function onPregenProgress(
