@@ -140,13 +140,16 @@ pub fn run() {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 
                 // 自定义 Quit 项：id 走 on_menu_event 识别（accelerator 自动绑定 Cmd+Q）
-                let quit_item = MenuItemBuilder::with_id("app:quit", "Quit peiyuan")
+                let quit_item = MenuItemBuilder::with_id("app:quit", "Quit 英语听力练习")
                     .accelerator("CmdOrCtrl+Q")
                     .build(app)?;
 
                 // App submenu（macOS 上必须存在；title 会被 NSMenuBarItem 替换为 app 名）
-                let app_menu = SubmenuBuilder::new(app, "peiyuan")
-                    .about(Some(tauri::menu::AboutMetadata::default()))
+                let app_menu = SubmenuBuilder::new(app, "英语听力练习")
+                    .about(Some(tauri::menu::AboutMetadata {
+                        name: Some("英语听力练习".to_string()),
+                        ..tauri::menu::AboutMetadata::default()
+                    }))
                     .separator()
                     .services()
                     .separator()
