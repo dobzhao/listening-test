@@ -28,7 +28,7 @@ import { usePregenStore } from "@/store/pregen";
 import { useGenerationProgress } from "@/hooks/useGenerationProgress";
 import { DIFFICULTY_LEVEL_LABELS, type DifficultyLevel } from "@/types/config";
 import { toast } from "@/store/toast";
-import { startTestFromPregen } from "@/lib/tauri";
+import { pickTestFromPregen } from "@/lib/tauri";
 
 export default function MainMenu() {
   const navigate = useNavigate();
@@ -110,7 +110,10 @@ export default function MainMenu() {
 
   const handleStartFromBank = async () => {
     try {
-      const s = await startTestFromPregen();
+      // 仅「预选」题库条目：不动文件、不标 Used、不触发补题 —— 真正激活（move + 标 Used + 补题）
+      // 在「准备开始测试」界面点「开始测试」按钮时由 activateTestFromPregen 完成。
+      // 这样即使用户在准备界面点「返回主菜单」，题库条目依然在 pool 里，下次再点可以复用。
+      const s = await pickTestFromPregen();
       setLegacySession(s);
       navigate("/test");
     } catch (e) {
@@ -154,7 +157,7 @@ export default function MainMenu() {
           <div>
             <h1 className="text-2xl font-bold">英语听力练习</h1>
             <p className="text-sm text-muted-foreground">
-              跨平台听说考试模拟 · 19 题完整流程
+              听说考试模拟
             </p>
           </div>
         </div>

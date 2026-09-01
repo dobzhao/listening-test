@@ -1,11 +1,16 @@
 //! 预生成题库（Pregen Pool）Tauri commands
 //!
-//! 5 个 invoke：
-//! - `get_pregen_summary`   → PregenSummary（前端轮询用）
-//! - `list_unused_pregen`   → Vec<PregenEntry>（预留，MVP 不调用）
-//! - `enqueue_pregen(count)`→ () 把 N 套加入队列
-//! - `cancel_pregen`        → () 取消当前队列
-//! - `start_test_from_pregen` → TestSession 选中最早 unused 并激活到 cache/
+//! 6 个 invoke：
+//! - `get_pregen_summary`        → PregenSummary（前端轮询用）
+//! - `list_unused_pregen`        → Vec<PregenEntry>（预留，MVP 不调用）
+//! - `enqueue_pregen(count)`     → () 把 N 套加入队列
+//! - `cancel_pregen`             → () 取消当前队列
+//! - `pick_test_from_pregen`     → TestSession 从题库选最早 unused 并加载到 SessionState
+//!                                  （**不改 status、不移动文件、不触发补题**——
+//!                                  让用户在"准备开始测试"界面返回主菜单时一条题都不浪费）
+//! - `activate_test_from_pregen` → TestSession 把 SessionState 里的 picked 条目 move 到 cache/、
+//!                                  标 Used、enqueue(1) 补题（仅在"准备开始测试"界面真正点
+//!                                  "开始测试"按钮时调用，对应 commit 描述的需求）
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -112,17 +117,15 @@ pub fn cancel_pregen(
     Ok(())
 }
 
-// ===== 5. 从题库激活最早一条 unused，进入测试 =====
+// ===== 5. 内部：解析 effective_level 并按 level 选最早一条 unused =====
+//
+// pick 与 activate 都要走一遍：pick 用来"挑选"，activate 不再选（按 SessionState 里
+// 已记录的 session_id 激活）。两者提取共有逻辑便于保持一致。
 
-#[tauri::command]
-pub async fn start_test_from_pregen(
-    app: AppHandle,
-    pool: State<'_, PregenPoolRuntime>,
-    session_state: State<'_, SessionState>,
-    config_state: State<'_, ConfigState>,
-    adaptive_handle: State<'_, AdaptiveStateHandle>,
-) -> Result<TestSession, String> {
-    // 1. 解析 effective_level（与 commands/test_session::generate_test_session 同样的逻辑）
+async fn resolve_effective_level(
+    config_state: &State<'_, ConfigState>,
+    adaptive_handle: &State<'_, AdaptiveStateHandle>,
+) -> Result<String, String> {
     let config = {
         let guard = config_state
             .inner
@@ -134,7 +137,7 @@ pub async fn start_test_from_pregen(
         let guard = adaptive_handle.0.read().await;
         crate::commands::adaptive::AdaptiveStateSnapshot::from(&*guard)
     };
-    let effective_level = adaptive_svc::effective_level(
+    Ok(adaptive_svc::effective_level(
         &adaptive_difficulty::AdaptiveState {
             ability_score: snap.ability_score,
             trend: snap.trend,
@@ -143,33 +146,51 @@ pub async fn start_test_from_pregen(
         },
         &config.difficulty.mode,
         &config.difficulty.level,
-    );
+    ))
+}
 
-    // 2. 选该难度最早 unused
-    let picked_id = {
-        let p = pool.pool.read().await;
-        p.entries
-            .values()
-            .find(|e| e.status == PregenStatus::Unused && e.level == effective_level)
-            .map(|e| e.session_id.clone())
-            .ok_or_else(|| {
-                format!(
-                    "题库中没有 {} 难度的可用题目，请先补充题库",
-                    effective_level
-                )
-            })?
-    };
+async fn pick_earliest_unused_id(
+    pool: &State<'_, PregenPoolRuntime>,
+    level: &str,
+) -> Result<String, String> {
+    let p = pool.pool.read().await;
+    p.entries
+        .values()
+        .find(|e| e.status == PregenStatus::Unused && e.level == level)
+        .map(|e| e.session_id.clone())
+        .ok_or_else(|| {
+            format!(
+                "题库中没有 {level} 难度的可用题目，请先补充题库"
+            )
+        })
+}
+
+// ===== 6. 从题库挑选最早一条 unused，但不移动文件、不标 Used、不补题 =====
+//
+// 时机：用户在主菜单点击「开始测试（X 套 · 难度：Y）」按钮时调用。
+// 加载 pregen/{uuid}/session.json 写入 SessionState 供前端 store + 后续 start_test_flow 使用。
+// **不要** 让这一步把题目标记为已使用 —— 用户在"准备开始测试"界面再次点击「返回主菜单」时，
+// 题目应当原封不动地留在题库池中。
+
+#[tauri::command]
+pub async fn pick_test_from_pregen(
+    app: AppHandle,
+    pool: State<'_, PregenPoolRuntime>,
+    session_state: State<'_, SessionState>,
+    config_state: State<'_, ConfigState>,
+    adaptive_handle: State<'_, AdaptiveStateHandle>,
+) -> Result<TestSession, String> {
+    let effective_level = resolve_effective_level(&config_state, &adaptive_handle).await?;
+    let picked_id = pick_earliest_unused_id(&pool, &effective_level).await?;
 
     info!(
         session_id = %picked_id,
         effective_level = %effective_level,
-        "start_test_from_pregen: 激活题库"
+        "pick_test_from_pregen: 从题库挑选（不动文件状态）"
     );
 
-    // 3. move pregen/{uuid}/ → cache/{uuid}/（activate_one 内部已重写 audio_paths 绝对路径）
-    let session = pregen_svc::activate_one(&app, &picked_id)?;
+    let session = pregen_svc::load_pregen_session_json(&app, &picked_id)?;
 
-    // 4. 写 SessionState
     {
         let mut guard = session_state
             .inner
@@ -178,7 +199,50 @@ pub async fn start_test_from_pregen(
         *guard = Some(session.clone());
     }
 
-    // 6. 把 entry.status 标为 Used 并落盘
+    Ok(session)
+}
+
+// ===== 7. 激活 SessionState 里的 picked 条目：move 文件 + 标 Used + enqueue(1) =====
+//
+// 时机：用户在「准备开始测试」界面真正点击「开始测试」按钮时调用。
+// 完成此时才把条目从 pregen/ 搬到 cache/，并标 status = Used。
+// 在此之前用户从「准备开始测试」返回主菜单不会浪费任何一条题目。
+
+#[tauri::command]
+pub async fn activate_test_from_pregen(
+    app: AppHandle,
+    pool: State<'_, PregenPoolRuntime>,
+    session_state: State<'_, SessionState>,
+) -> Result<TestSession, String> {
+    let picked_id = {
+        let guard = session_state
+            .inner
+            .lock()
+            .map_err(|e| format!("SessionState lock failed: {e}"))?;
+        let s = guard
+            .as_ref()
+            .ok_or_else(|| "SessionState 为空，请先调用 pick_test_from_pregen".to_string())?;
+        s.session_id.clone()
+    };
+
+    info!(
+        session_id = %picked_id,
+        "activate_test_from_pregen: 激活题库到 cache/"
+    );
+
+    // move pregen/{uuid}/ → cache/{uuid}/（activate_one 内部已重写 audio_paths 绝对路径）
+    let session = pregen_svc::activate_one(&app, &picked_id)?;
+
+    // 更新 SessionState（audio_paths 已重写为 cache/ 路径，后续 start_test_flow 拿到的是正确的 session）
+    {
+        let mut guard = session_state
+            .inner
+            .lock()
+            .map_err(|e| format!("SessionState lock failed: {e}"))?;
+        *guard = Some(session.clone());
+    }
+
+    // 标 Used + 落盘
     {
         let mut p = pool.pool.write().await;
         if let Some(entry) = p.entries.get_mut(&picked_id) {
@@ -187,13 +251,13 @@ pub async fn start_test_from_pregen(
         pregen_svc::save_index(&app, &p)?;
     }
 
-    // 7. 后台自动再补 1 套
+    // 后台自动再补 1 套
     pregen_svc::enqueue(&app, 1);
     pregen_svc::ensure_worker(app.clone());
 
     info!(
         session_id = %picked_id,
-        "start_test_from_pregen: 已激活 + 入队 1 套补充"
+        "activate_test_from_pregen: 已激活 + 入队 1 套补充"
     );
     Ok(session)
 }

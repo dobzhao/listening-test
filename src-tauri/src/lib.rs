@@ -250,7 +250,8 @@ pub fn run() {
             commands::pregen::list_unused_pregen,
             commands::pregen::enqueue_pregen,
             commands::pregen::cancel_pregen,
-            commands::pregen::start_test_from_pregen,
+            commands::pregen::pick_test_from_pregen,
+            commands::pregen::activate_test_from_pregen,
             // 关窗拦截
             commands::app_close::confirm_close_app,
             commands::app_close::cancel_close_app,
