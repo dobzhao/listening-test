@@ -47,6 +47,10 @@
       "deb": {
         "desktopTemplate": "templates/peiyuan.desktop"
       }
+    },
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
     }
   }
 }
