@@ -62,10 +62,17 @@ export default function MainMenu() {
 
   useGenerationProgress();
 
-  // 启动时拉题库摘要（兜底；App.tsx 也调过一次）
+  // 每次主菜单挂载都重新拉题库摘要：
+  // - App.tsx 只在启动时拉一次；
+  // - 用户从 /test 返回主菜单后，`activate_test_from_pregen` 已把题目标记为 Used
+  //   并 enqueue(1) 补题，但前端 store 没有任何事件触发 loadSummary
+  //   （pregen-finished 仅在 worker 跑完全部入队条目时才发，且 activate 路径根本不发），
+  //   会导致「开始测试（X 套 · 难度：Y）」按钮上的剩余套数显示陈旧值。
+  // - 配合 store/pregen.setProgress 的 stage="done" 分支，可在批量补题过程中
+  //   实时看到 unusedCount 增长。
   useEffect(() => {
-    if (loaded && !usePregenStore.getState().loaded) {
-      loadSummary();
+    if (loaded) {
+      void loadSummary();
     }
   }, [loaded, loadSummary]);
 
@@ -83,7 +90,6 @@ export default function MainMenu() {
 
   const unusedCount = pregenSummary?.unusedByLevel[effectiveLevel] ?? 0;
   const totalUnused = pregenSummary?.unusedCount ?? 0;
-  const totalAll = pregenSummary?.totalCount ?? 0;
   const generatingNow = pregenSummary?.generatingNow ?? false;
 
   // 已就绪的 session 可能由旧的 generate_test_session 留下（MVP 期不应该，但兜底）
@@ -194,8 +200,11 @@ export default function MainMenu() {
                   )}
                 </div>
                 <CardDescription>
-                  当前难度「{levelLabel}」可用 <strong>{unusedCount}</strong> 套，
-                  题库共 {totalUnused} 套未使用 / {totalAll} 套总计
+                  当前难度「{levelLabel}」可用{" "}
+                  <strong className={unusedCount === 0 ? "text-rose-600" : "text-emerald-600"}>
+                    {unusedCount}
+                  </strong>{" "}
+                  套
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
