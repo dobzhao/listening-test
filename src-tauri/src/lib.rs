@@ -71,7 +71,7 @@ pub fn run() {
     // _log_guard 必须活到进程结束；drop 时 non-blocking 自动 flush
     let _log_guard = init_logging();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(ConfigState::default())
@@ -88,6 +88,19 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if commands::app_close::intercept_close(window.app_handle()) {
                     api.prevent_close();
+                }
+            }
+        })
+        // macOS 菜单 Quit / Cmd+Q 拦截（覆盖 WindowEvent::CloseRequested 覆盖不到的场景）：
+        // Tauri 2.x 在 macOS 上不会把 applicationShouldTerminate: 桥接到
+        // RunEvent::ExitRequested（已知 bug，见 tauri-apps/tauri#9198），所以
+        // 菜单 Quit / Cmd+Q 直接走到 RunEvent::Exit（terminal event，不可 prevent）。
+        // 因此必须在菜单层拦截：空闲直接 app.exit(0)；忙碌 emit `app-close-requested`
+        // 等前端确认后调 confirm_close_app → window.destroy() → app 自然结束。
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "app:quit" {
+                if !commands::app_close::intercept_close(app) {
+                    app.exit(0);
                 }
             }
         })
@@ -115,6 +128,69 @@ pub fn run() {
                 *guard = recovered;
             } else {
                 tracing::warn!("pregen Runtime.pool 已被占用，启动恢复失败");
+            }
+
+            // macOS 应用菜单：替换默认 Quit 项，让 Cmd+Q / 顶部菜单 Quit 走拦截逻辑。
+            // 详见 commands/app_close.rs 模块文档。
+            // ⚠️ Tauri 2.x 在 macOS 上不会把 applicationShouldTerminate: 桥接到
+            // RunEvent::ExitRequested（已知 bug，见 tauri-apps/tauri#9198），所以
+            // 必须**在菜单层**拦截 Cmd+Q / 菜单 Quit。
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+
+                // 自定义 Quit 项：id 走 on_menu_event 识别（accelerator 自动绑定 Cmd+Q）
+                let quit_item = MenuItemBuilder::with_id("app:quit", "Quit peiyuan")
+                    .accelerator("CmdOrCtrl+Q")
+                    .build(app)?;
+
+                // App submenu（macOS 上必须存在；title 会被 NSMenuBarItem 替换为 app 名）
+                let app_menu = SubmenuBuilder::new(app, "peiyuan")
+                    .about(Some(tauri::menu::AboutMetadata::default()))
+                    .separator()
+                    .services()
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .item(&quit_item)
+                    .build()?;
+
+                let file_menu = SubmenuBuilder::new(app, "File")
+                    .close_window()
+                    .build()?;
+
+                let edit_menu = SubmenuBuilder::new(app, "Edit")
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+
+                let view_menu = SubmenuBuilder::new(app, "View")
+                    .fullscreen()
+                    .build()?;
+
+                let window_menu = SubmenuBuilder::new(app, "Window")
+                    .minimize()
+                    .maximize()
+                    .separator()
+                    .close_window()
+                    .build()?;
+
+                let menu = MenuBuilder::new(app)
+                    .item(&app_menu)
+                    .item(&file_menu)
+                    .item(&edit_menu)
+                    .item(&view_menu)
+                    .item(&window_menu)
+                    .build()?;
+
+                app.set_menu(menu)?;
             }
 
             Ok(())
@@ -176,6 +252,18 @@ pub fn run() {
             commands::app_close::confirm_close_app,
             commands::app_close::cancel_close_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("启动 Tauri 应用失败");
+        .build(tauri::generate_context!())
+        .expect("构建 Tauri 应用失败");
+
+    // 兜底：Tauri 2.x 在 macOS 上不会把 Cmd+Q / 菜单 Quit 桥接到
+    // RunEvent::ExitRequested（已知 bug，见 tauri-apps/tauri#9198），所以
+    // 这些退出路径已由上面的 `.on_menu_event` 拦截。这里只处理 Windows / Linux
+    // 上最后一个窗口关闭后由 Tauri 内部触发的 ExitRequested 兜底。
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if commands::app_close::intercept_close(app_handle) {
+                api.prevent_exit();
+            }
+        }
+    });
 }
