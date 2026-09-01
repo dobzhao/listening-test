@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "prebuild": "node -e \"const fs=require('fs');const p='src-tauri/target/release/bundle/macos';if(fs.existsSync(p)){for(const f of fs.readdirSync(p)){if(f.endsWith('.dmg'))fs.rmSync(p+'/'+f,{force:true});}}\" 2>/dev/null || true",
+    "pretauri:build": "npm run prebuild"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",
