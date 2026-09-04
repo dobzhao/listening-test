@@ -351,7 +351,7 @@ export default function MainMenu() {
                   设置
                 </CardTitle>
                 <CardDescription>
-                  配置模型服务、提示词模板、麦克风/键盘测试
+                  配置模型服务、提示词模板、难度设置、设备测试
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -372,8 +372,8 @@ export default function MainMenu() {
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-2">
                 <p>
-                  本程序使用本地/自建 OpenAI 兼容 LLM/TTS/STT 服务，所有题目
-                  内容均由模型实时生成。
+                  本程序使用OpenAI兼容LLM/TTS/STT服务，所有题目
+                  文本及音频均由模型实时生成。
                 </p>
               </CardContent>
             </Card>
