@@ -11,6 +11,10 @@ pub struct McqResult {
     pub user_answer: Option<String>,
     pub correct_answer: String,
     pub is_correct: bool,
+    /// 题面英文题干（结算页悬浮弹窗用）
+    pub question_stem: String,
+    /// A/B/C 三个选项文本（结算页悬浮弹窗用）
+    pub options: HashMap<String, String>,
 }
 
 /// 第 15-18 题的单空作答结果

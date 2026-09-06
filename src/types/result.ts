@@ -7,6 +7,10 @@ export interface McqResult {
   user_answer: "A" | "B" | "C" | null;
   correct_answer: "A" | "B" | "C";
   is_correct: boolean;
+  /** 题面英文题干（结算页悬浮弹窗用） */
+  question_stem: string;
+  /** A/B/C 三个选项文本（结算页悬浮弹窗用） */
+  options: Record<string, string>;
 }
 
 export interface BlankResult {

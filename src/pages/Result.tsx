@@ -1,6 +1,6 @@
 // 结算页：展示 1-14 选择题对错、15-18 挖空得分、19 题转述得分
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Card,
@@ -13,6 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import {
   CheckCircle2,
   XCircle,
@@ -37,6 +42,7 @@ import {
 import type { McqResult, BlankResult, RetellResult, AdaptiveSummary } from "@/types/result";
 import { DIFFICULTY_LEVEL_LABELS } from "@/types/config";
 import { AbilityProgressBar } from "@/components/AbilityProgressBar";
+import { cn } from "@/lib/utils";
 
 export default function ResultPage() {
   const navigate = useNavigate();
@@ -449,54 +455,190 @@ function McqSection({
       <CardHeader>
         <CardTitle className="text-lg">1-14 题（听后选择）</CardTitle>
         <CardDescription>
-          点击展开对话原文与正确答案
+          悬停查看对话原文、题面与正确答案
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
-          {results.map((r) => (
-            <McqCard key={r.question_id} result={r} />
-          ))}
+          {results.map((r) => {
+            // Q13/Q14 共用独白文本（dialogue_texts 的 key 是 "m13"）
+            const key =
+              r.question_id >= 13 && r.question_id <= 14
+                ? "m13"
+                : `q${r.question_id}`;
+            return (
+              <McqCard
+                key={r.question_id}
+                result={r}
+                dialogueText={dialogueTexts[key]}
+              />
+            );
+          })}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function McqCard({ result }: { result: McqResult }) {
-  const [open, setOpen] = useState(false);
+function McqCard({
+  result,
+  dialogueText,
+}: {
+  result: McqResult;
+  dialogueText: string | undefined;
+}) {
   const userLabel = result.user_answer ?? "未作答";
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={`w-full rounded-md border p-2.5 text-left transition-colors ${
-          result.is_correct
-            ? "border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
-            : "border-rose-200 bg-rose-50 hover:bg-rose-100"
-        }`}
-      >
-        <div className="flex items-center justify-between">
-          <span className="font-mono text-sm font-semibold">
-            Q{result.question_id}
-          </span>
-          {result.is_correct ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          ) : (
-            <XCircle className="w-4 h-4 text-rose-600" />
+    <HoverCard openDelay={120} closeDelay={80}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "w-full rounded-md border p-2.5 text-left transition-colors",
+            result.is_correct
+              ? "border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
+              : "border-rose-200 bg-rose-50 hover:bg-rose-100"
           )}
-        </div>
-        <p className="mt-1 text-xs">
-          {result.is_correct ? (
-            <span className="text-emerald-700">正确 ({userLabel})</span>
-          ) : (
-            <span className="text-rose-700">
-              错（你：{userLabel} / 正：{result.correct_answer}）
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-sm font-semibold">
+              Q{result.question_id}
             </span>
-          )}
-        </p>
-      </button>
+            {result.is_correct ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            ) : (
+              <XCircle className="w-4 h-4 text-rose-600" />
+            )}
+          </div>
+          <p className="mt-1 text-xs">
+            {result.is_correct ? (
+              <span className="text-emerald-700">正确 ({userLabel})</span>
+            ) : (
+              <span className="text-rose-700">
+                错（你：{userLabel} / 正：{result.correct_answer}）
+              </span>
+            )}
+          </p>
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent
+        side="top"
+        align="center"
+        sideOffset={8}
+        className="w-[420px] p-0"
+      >
+        <McqHoverContent result={result} dialogueText={dialogueText} />
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+function McqHoverContent({
+  result,
+  dialogueText,
+}: {
+  result: McqResult;
+  dialogueText: string | undefined;
+}) {
+  const optionKeys = ["A", "B", "C"] as const;
+  return (
+    <div className="flex flex-col max-h-[480px]">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <span className="font-mono text-sm font-semibold">
+          第 {result.question_id} 题
+        </span>
+        {result.is_correct ? (
+          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100 text-xs">
+            答对了
+          </Badge>
+        ) : (
+          <Badge variant="destructive" className="text-xs">
+            {result.user_answer ? "答错了" : "未作答"}
+          </Badge>
+        )}
+      </div>
+
+      {/* Scrollable body */}
+      <ScrollArea className="flex-1 px-4 py-3">
+        {/* 1. 原文 */}
+        <section className="mb-4">
+          <p className="text-xs font-medium text-muted-foreground mb-1.5">
+            原文
+          </p>
+          <div className="rounded-md bg-muted/30 border p-3 text-sm whitespace-pre-wrap leading-relaxed">
+            {dialogueText ?? "（原文缺失）"}
+          </div>
+        </section>
+
+        {/* 2. 题目 */}
+        <section className="mb-4">
+          <p className="text-xs font-medium text-muted-foreground mb-1.5">
+            题目
+          </p>
+          <p className="text-sm leading-relaxed">
+            {result.question_stem || "（题面缺失）"}
+          </p>
+        </section>
+
+        {/* 3. A/B/C 选项 */}
+        <section className="mb-4">
+          <p className="text-xs font-medium text-muted-foreground mb-1.5">
+            选项
+          </p>
+          <ul className="space-y-1.5">
+            {optionKeys.map((k) => {
+              const isUserPick = result.user_answer === k;
+              const isCorrectPick = result.correct_answer === k;
+              return (
+                <li
+                  key={k}
+                  className={cn(
+                    "flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-sm",
+                    isCorrectPick && "border-emerald-200 bg-emerald-50",
+                    isUserPick && !isCorrectPick && "border-rose-200 bg-rose-50",
+                    !isCorrectPick && !isUserPick && "border-muted bg-background"
+                  )}
+                >
+                  <span className="font-mono font-semibold shrink-0 w-5">
+                    {k}.
+                  </span>
+                  <span className="flex-1">{result.options[k] ?? ""}</span>
+                  {isCorrectPick && (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  )}
+                  {isUserPick && !isCorrectPick && (
+                    <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
+        {/* 4. 我的 vs 正确答案 */}
+        <section className="rounded-md bg-muted/20 border p-3 text-sm">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">你的选择</p>
+              <p
+                className={cn(
+                  "font-mono font-semibold",
+                  result.is_correct ? "text-emerald-700" : "text-rose-700"
+                )}
+              >
+                {result.user_answer ?? "未作答"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">正确答案</p>
+              <p className="font-mono font-semibold text-emerald-700">
+                {result.correct_answer}
+              </p>
+            </div>
+          </div>
+        </section>
+      </ScrollArea>
     </div>
   );
 }

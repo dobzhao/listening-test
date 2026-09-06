@@ -7,7 +7,7 @@
 
 use adaptive_difficulty::{AdaptiveState, Params};
 use crate::models::config::{AppConfig, LlmParams, ModelConfig, PromptConfig};
-use crate::models::question::TestSession;
+use crate::models::question::{MultipleChoiceQuestion, TestSession};
 use crate::models::result::{BlankResult, McqResult, RetellResult, TestResult};
 use crate::services::adaptive as adaptive_svc;
 use crate::services::http_client::build_client;
@@ -101,8 +101,36 @@ pub enum ScoringError {
     HttpClient(String),
 }
 
+/// 按 `question_id` 在 `TestSession` 中查找对应的 `MultipleChoiceQuestion`。
+///
+/// 与 `score_full_test` 中 `dialogue_texts` 的查找路径保持一致：
+///   1) Q1-4 短对话，每段含 1 道题
+///   2) Q5-12 长对话，每段含 2 道题，两题共享同一段对话
+///   3) Q13-14 独白，独白文本与 2 道题均挂载在 `session.monologue`
+fn find_question_for_id<'a>(
+    session: &'a TestSession,
+    qid: u32,
+) -> Option<&'a MultipleChoiceQuestion> {
+    if let Some(d) = session.short_dialogues.iter().find(|d| d.question.id == qid) {
+        return Some(&d.question);
+    }
+    for d in &session.long_dialogues {
+        if let Some(q) = d.questions.iter().find(|q| q.id == qid) {
+            return Some(q);
+        }
+    }
+    if let Some(q) = session.monologue.questions.iter().find(|q| q.id == qid) {
+        return Some(q);
+    }
+    None
+}
+
 /// 1-14 题本地评分（不调用 LLM）
+///
+/// `session` 用于从 `TestSession` 反查每道题的题面与 A/B/C 选项文本，
+/// 写入 `McqResult.question_stem` / `options` 供结算页悬浮弹窗使用。
 pub fn score_mcq(
+    session: &TestSession,
     answers: &HashMap<u32, Option<String>>,
     correct_answers: &HashMap<u32, String>,
     question_ids: &[u32],
@@ -116,11 +144,16 @@ pub fn score_mcq(
                 .cloned()
                 .unwrap_or_else(|| "A".to_string());
             let is_correct = user_answer.as_deref() == Some(correct_answer.as_str());
+            let (question_stem, options) = find_question_for_id(session, qid)
+                .map(|q| (q.question.clone(), q.options.clone()))
+                .unwrap_or_else(|| (String::new(), HashMap::new()));
             McqResult {
                 question_id: qid,
                 user_answer,
                 correct_answer,
                 is_correct,
+                question_stem,
+                options,
             }
         })
         .collect()
@@ -403,7 +436,7 @@ pub async fn score_full_test(
     app: Option<&AppHandle>,
 ) -> Result<TestResult, ScoringError> {
     // 1. 1-14 题本地评分
-    let mcq_results = score_mcq(user_answers, correct_answers, mcq_question_ids);
+    let mcq_results = score_mcq(session, user_answers, correct_answers, mcq_question_ids);
 
     // 2. 15-18 题 LLM 评分
     let (blank_results, blank_total) = score_blanks_15_18(
