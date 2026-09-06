@@ -22,13 +22,17 @@ interface TimingField {
     | "intro_ms"
     | "short_dialogue_prepare_ms"
     | "short_dialogue_answer_ms"
+    | "group_intro_ms"
     | "group_prepare_ms"
     | "group_pause_ms"
     | "group_answer_ms"
+    | "retell_intro_ms"
     | "retell_prepare_ms"
     | "retell_pause_ms"
     | "retell_fill_blank_ms"
-    | "retell_recall_prep_ms";
+    | "retell_recall_prep_ms"
+    | "retell_q19_intro_ms"
+    | "retell_play3_intro_ms";
   label: string;
   hint: string;
 }
@@ -36,8 +40,8 @@ interface TimingField {
 const TIMING_FIELDS: TimingField[] = [
   {
     key: "intro_ms",
-    label: "第 1 题开场介绍",
-    hint: "仅在第 1 题前显示一次",
+    label: "1-4 题开场介绍",
+    hint: "仅在第 1 题前显示一次；设为 0 秒可跳过",
   },
   {
     key: "short_dialogue_prepare_ms",
@@ -48,6 +52,11 @@ const TIMING_FIELDS: TimingField[] = [
     key: "short_dialogue_answer_ms",
     label: "1-4 题 ANSWERING",
     hint: "短对话：选项可点击倒计时",
+  },
+  {
+    key: "group_intro_ms",
+    label: "5-14 题开场介绍",
+    hint: "仅在第 5 题前显示一次；设为 0 秒可跳过",
   },
   {
     key: "group_prepare_ms",
@@ -65,6 +74,11 @@ const TIMING_FIELDS: TimingField[] = [
     hint: "长对话/独白：两题共享作答时间",
   },
   {
+    key: "retell_intro_ms",
+    label: "15-18 题开场介绍",
+    hint: "在 PREPARE 之前显示；设为 0 秒可跳过",
+  },
+  {
     key: "retell_prepare_ms",
     label: "15-19 题 PREPARE",
     hint: "听后转述：展示挖空表格",
@@ -80,9 +94,19 @@ const TIMING_FIELDS: TimingField[] = [
     hint: "用户填写 4 个挖空",
   },
   {
+    key: "retell_play3_intro_ms",
+    label: "15-19 题播放 #3 前介绍",
+    hint: "挖空完成后、第 3 次播放之前显示；设为 0 秒可跳过",
+  },
+  {
     key: "retell_recall_prep_ms",
     label: "15-19 题 RECALL_PREP",
     hint: "默读准备时间",
+  },
+  {
+    key: "retell_q19_intro_ms",
+    label: "19 题介绍",
+    hint: "默读准备之后、开始录音之前；设为 0 秒可跳过",
   },
 ];
 
@@ -168,6 +192,7 @@ export function TimingPanel() {
           <br />
           <span className="text-xs">
             注：第 19 题录音时长固定 90 秒，由 STT/LLM 判分稳定性约束，不在此处配置。
+            5 个开场介绍的文案在「开场介绍」Tab 中编辑。
           </span>
         </p>
       </CardHeader>

@@ -21,6 +21,7 @@ import { LlmParamsPanel } from "@/components/settings/LlmParamsPanel";
 import { MicTest } from "@/components/settings/MicTest";
 import { KeyboardTest } from "@/components/settings/KeyboardTest";
 import { TimingPanel } from "@/components/settings/TimingPanel";
+import { IntroPanel } from "@/components/settings/IntroPanel";
 import { DifficultyPanel } from "@/components/settings/DifficultyPanel";
 import {
   DEFAULT_LLM_API_PATH,
@@ -114,7 +115,7 @@ export default function SettingsPage() {
 
       <main className="container max-w-5xl mx-auto py-6">
         <Tabs defaultValue="llm" className="space-y-4">
-          <TabsList className="grid grid-cols-3 md:grid-cols-8 w-full">
+          <TabsList className="grid grid-cols-3 md:grid-cols-9 w-full">
             <TabsTrigger value="llm">LLM</TabsTrigger>
             <TabsTrigger value="tts">TTS</TabsTrigger>
             <TabsTrigger value="stt">STT</TabsTrigger>
@@ -122,6 +123,7 @@ export default function SettingsPage() {
             <TabsTrigger value="difficulty">题目难度</TabsTrigger>
             <TabsTrigger value="audio">音频</TabsTrigger>
             <TabsTrigger value="timing">流程时长</TabsTrigger>
+            <TabsTrigger value="intro">开场介绍</TabsTrigger>
             <TabsTrigger value="device">设备测试</TabsTrigger>
           </TabsList>
 
@@ -144,7 +146,7 @@ export default function SettingsPage() {
             <ModelConfigForm
               kind="tts"
               title="TTS（语音合成）"
-              description="用于把对话/独白文本转为 wav。双人对话：A=af_heart, B=am_michael。"
+              description="用于把对话/独白文本转为 wav。"
               config={config.tts}
               defaultPath={DEFAULT_TTS_API_PATH}
               defaultModel={DEFAULT_TTS_MODEL}
@@ -246,6 +248,11 @@ export default function SettingsPage() {
           {/* 流程时长 */}
           <TabsContent value="timing" className="space-y-4">
             <TimingPanel />
+          </TabsContent>
+
+          {/* 开场介绍文案 */}
+          <TabsContent value="intro" className="space-y-4">
+            <IntroPanel />
           </TabsContent>
 
           {/* 设备测试 */}

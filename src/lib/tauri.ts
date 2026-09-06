@@ -14,6 +14,8 @@ import type {
   DifficultyDemand,
   DifficultyLevel,
   DifficultyDemandKey,
+  IntroConfig,
+  IntroKey,
   TimingConfig,
 } from "@/types/config";
 import type { TestSession } from "@/types/question";
@@ -38,6 +40,16 @@ export async function restoreDefaultPrompt(key: string): Promise<string> {
 
 export async function restoreDefaultTiming(): Promise<TimingConfig> {
   return invoke<TimingConfig>("restore_default_timing");
+}
+
+/** 恢复单段开场介绍文案（细粒度，对齐 `restoreDefaultPrompt`） */
+export async function restoreDefaultIntro(key: IntroKey): Promise<string> {
+  return invoke<string>("restore_default_intro", { args: { key } });
+}
+
+/** 恢复全部 4 段开场介绍文案 */
+export async function restoreDefaultIntroAll(): Promise<IntroConfig> {
+  return invoke<IntroConfig>("restore_default_intro_all");
 }
 
 /**
@@ -203,6 +215,10 @@ export interface FlowStatePayload {
   /** 15-19 题当前是第几次播放（null = 非 playing 或 1-14 题）。
    * 仅 PLAYING #1/#2/#3 分别取值 1/2/3，前端据此在 PLAYING #3 禁用填空（Spec §3.4）。 */
   playCount: number | null;
+  /** 开场介绍文案（仅 intro 阶段为字符串，其余阶段为 null）。
+   * 由后端从 `IntroConfig` 取出后下发，前端直接渲染，
+   * 不再在前端维护「阶段 → 文案」映射。 */
+  introText: string | null;
 }
 
 export interface AudioPlayPayload {

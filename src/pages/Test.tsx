@@ -97,6 +97,9 @@ export default function TestPage() {
   // 15-19 题当前播放轮次：1=PLAYING#1, 2=PLAYING#2, 3=PLAYING#3（其余 null）。
   // PLAYING #3 阶段挖空应禁用（Spec §3.4）。
   const playCount = useTestFlowStore((s) => s.playCount);
+  // 开场介绍文案：4 个 INTRO 阶段（1-4 / 5-14 / 15-18 / 19 题前）由后端下发，
+  // 内容在「设置 → 开场介绍」中可编辑，前端只负责显示。
+  const introText = useTestFlowStore((s) => s.introText);
   const applyFlowState = useTestFlowStore((s) => s.applyFlowState);
   const applyFinished = useTestFlowStore((s) => s.applyFinished);
 
@@ -247,6 +250,12 @@ export default function TestPage() {
     return <TestStartCard onStart={startTestFlow} />;
   }
 
+  // 开场介绍阶段：仅展示介绍文案与倒计时，不显示题目/选项/挖空/下一题，
+  // 避免提前暴露后续题目内容。
+  if (phase === "intro") {
+    return <IntroScreen introText={introText} />;
+  }
+
   // 15-19 题专用视图
   if (questionIndex >= 15) {
     return (
@@ -268,7 +277,7 @@ export default function TestPage() {
               <PhaseCountdown />
               {phase === "prepare" && (
                 <p className="text-sm text-muted-foreground">
-                  请阅读下方总-分结构与挖空，音频即将播放（共 3 次）
+                  请阅读下方表格，音频即将播放（共 3 次）
                 </p>
               )}
               {phase === "playing" && (
@@ -365,11 +374,6 @@ export default function TestPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <PhaseCountdown />
-            {phase === "intro" && (
-              <p className="text-sm text-muted-foreground">
-                本部分共 4 道题（短对话），听完对话后选择正确答案。每题 10 秒作答时间。
-              </p>
-            )}
             {phase === "prepare" && (
               <p className="text-sm text-muted-foreground">
                 {isGroup ? "请阅读两组题目，音频即将播放 2 次" : "请阅读题目，音频即将播放"}
@@ -399,7 +403,7 @@ export default function TestPage() {
             {currentDialogue.kind === "short" && (
               <ShortDialogueDisplay
                 dialogue={currentDialogue.data}
-                showQuestion={phase !== "intro"}
+                showQuestion
                 showAnswer={phase === "playing" || phase === "answering"}
               />
             )}
@@ -407,7 +411,7 @@ export default function TestPage() {
               currentDialogue.kind === "monologue") && (
               <GroupDialogueDisplay
                 dialogue={currentDialogue.data}
-                showQuestion={phase !== "intro"}
+                showQuestion
                 showAnswer={phase === "playing" || phase === "answering"}
                 groupStartId={questionIndex}
               />
@@ -567,6 +571,77 @@ function NextQuestionButton({
         <SkipForward className="w-4 h-4 mr-2" />
         下一题
       </Button>
+    </div>
+  );
+}
+
+/**
+ * 开场介绍视图（Phase::Intro）。
+ *
+ * 4 个 INTRO 阶段（1-4 / 5-14 / 15-18 / 19 题前）共用此视图：
+ * - 仅展示介绍文案与倒计时，不渲染题目/选项/挖空表格
+ * - 不显示"下一题"按钮（run_intro 内部允许 skip，但前端不在此处暴露入口）
+ * - 底部保留"放弃并返回主菜单"以匹配其他阶段
+ *
+ * introText 由后端在 test-flow-state 事件中下发（FlowState.introText），
+ * 内容在「设置 → 开场介绍」中可编辑。
+ */
+function IntroScreen({ introText }: { introText: string | null }) {
+  const navigate = useNavigate();
+  const recorder = useRecorder();
+  const reset = useTestStore((s) => s.reset);
+
+  const handleAbandon = async () => {
+    if (!(await confirm("确认放弃本次测试？所有作答将被清空。"))) {
+      return;
+    }
+    // 介绍阶段通常不会在录音中，但保险起见仍先停录音
+    if (recorder.isRecording) {
+      try {
+        await recorder.stopLocalRecording();
+      } catch (e) {
+        console.error("[Intro] stopLocalRecording 失败", e);
+      }
+    }
+    navigate("/");
+    try {
+      await resetTestFlow();
+    } catch (e) {
+      console.error("[Intro] resetTestFlow 失败", e);
+    }
+    try {
+      await reset();
+    } catch (e) {
+      console.error("[Intro] reset 失败", e);
+    }
+    useResultStore.getState().reset();
+    useResultStore.getState().setIsRetest(false);
+    useTestFlowStore.getState().reset();
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-50">
+      <GlobalHeader />
+      <main className="flex-1 container max-w-5xl mx-auto py-8 space-y-6">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">{PHASE_LABELS["intro"]}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <PhaseCountdown />
+            {introText && (
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                {introText}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </main>
+      <footer className="border-t bg-white py-2 text-center">
+        <Button variant="ghost" size="sm" onClick={handleAbandon}>
+          放弃并返回主菜单
+        </Button>
+      </footer>
     </div>
   );
 }

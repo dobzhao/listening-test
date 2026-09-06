@@ -32,6 +32,9 @@ interface TestFlowState {
   // 仅 15-19 题的 PLAYING #1/#2/#3 阶段分别取值 1/2/3）。
   // 由 applyFlowState 写入，applyTick 不触碰（保持阶段内值稳定）。
   playCount: number | null;
+  // 开场介绍文案（仅 intro 阶段有值，其余阶段为 null）。
+  // 由后端随 flow-state 下发（4 个 INTRO 阶段各自对应 IntroConfig 里的一段文案）。
+  introText: string | null;
   // 用户作答
   answers: AnswerMap;
   // 是否已完成
@@ -57,6 +60,7 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
   isGroup: false,
   questionInGroup: 0,
   playCount: null,
+  introText: null,
   answers: {},
   finished: false,
   error: null,
@@ -77,6 +81,7 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
       isGroup: p.isGroup,
       questionInGroup: p.questionInGroup,
       playCount: p.playCount ?? null,
+      introText: p.introText ?? null,
     }),
 
   applyFinished: (p) =>
@@ -106,6 +111,7 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
       isGroup: false,
       questionInGroup: 0,
       playCount: null,
+      introText: null,
       answers: {},
       finished: false,
       error: null,

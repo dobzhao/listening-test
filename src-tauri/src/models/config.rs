@@ -108,6 +108,69 @@ impl Default for AudioConfig {
     }
 }
 
+/// 五段开场介绍文案（纯文字，随 INTRO 阶段展示，不合成语音）
+///
+/// 对应流程中的 5 个 INTRO 阶段：
+/// 1-4 题前 / 5-14 题前 / 15-18 题前 / 15-18 题 PLAYING #3 前 / 19 题录音前。
+/// 每个字段使用 `#[serde(default = ...)]`，旧配置文件缺字段时自动回退默认文案。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntroConfig {
+    /// 第 1 题前（1-4 题短对话部分）
+    #[serde(default = "default_intro_text_1_4")]
+    pub text_1_4: String,
+    /// 第 5 题前（5-14 题长对话 + 独白部分）
+    #[serde(default = "default_intro_text_5_14")]
+    pub text_5_14: String,
+    /// 第 15 题前（15-18 题听后转述填空部分）
+    #[serde(default = "default_intro_text_15_18")]
+    pub text_15_18: String,
+    /// 15-18 题 PLAYING #3 前（FILL_BLANK 之后、第 3 次播放之前）
+    #[serde(default = "default_intro_text_15_18_play3")]
+    pub text_15_18_play3: String,
+    /// 第 19 题录音前（默读准备之后）
+    #[serde(default = "default_intro_text_19")]
+    pub text_19: String,
+}
+
+impl Default for IntroConfig {
+    fn default() -> Self {
+        default_intro_texts()
+    }
+}
+
+fn default_intro_text_1_4() -> String {
+    default_intro_texts().text_1_4
+}
+fn default_intro_text_5_14() -> String {
+    default_intro_texts().text_5_14
+}
+fn default_intro_text_15_18() -> String {
+    default_intro_texts().text_15_18
+}
+fn default_intro_text_15_18_play3() -> String {
+    default_intro_texts().text_15_18_play3
+}
+fn default_intro_text_19() -> String {
+    default_intro_texts().text_19
+}
+
+/// 五段开场介绍的默认文案（与前端 `defaultAppConfig().intro` 保持一字一致）
+///
+/// 文字体量小、不含占位符、不需多语言，直接硬编码而非 `include_str!`
+/// （与 `default_difficulty_demands()` 同样的取舍）。
+pub fn default_intro_texts() -> IntroConfig {
+    IntroConfig {
+        text_1_4: "听下面四段对话，每段对话后有一道小题，从每题所给的A、B、C三个选项中选出最佳选项，并用鼠标点击该选项。听对话前，你将有时间阅读每小题。听完后，每小题将有作答时间，每段对话你将听一遍。"
+            .to_string(),
+        text_5_14: "听下面五段对话或独白，每段对话或独白后有两道小题，从每题所给的A、B、C三个选项中选出最佳选项，并用鼠标点击该选项。听每段对话或独白前，你将有时间阅读每小题。听完后，每小题将有作答时间。每段对话或独白你将听两遍。"
+            .to_string(),
+        text_15_18: "听两遍短文，根据所听内容和提示，将所缺的关键信息填写在相应位置上，每空只需填写一个词。"
+            .to_string(),
+        text_15_18_play3: "现在，请开始做转述准备。".to_string(),
+        text_19: "下面，请准备录音。倒计时结束后，在90秒内完成转述。".to_string(),
+    }
+}
+
 /// 测试流程各阶段时长（毫秒）。
 ///
 /// 所有字段都允许在设置界面调整，保留默认值与 Spec.md 第三节描述一致。
@@ -124,6 +187,9 @@ pub struct TimingConfig {
     /// 1-4 题（短对话）ANSWERING
     #[serde(default = "default_short_dialogue_answer_ms")]
     pub short_dialogue_answer_ms: u32,
+    /// 5-14 题前的开场介绍（INTRO），整段只在第 5 题前显示一次
+    #[serde(default = "default_group_intro_ms")]
+    pub group_intro_ms: u32,
     /// 5-12 / 13-14 题（长对话/独白）PREPARE
     #[serde(default = "default_group_prepare_ms")]
     pub group_prepare_ms: u32,
@@ -133,6 +199,9 @@ pub struct TimingConfig {
     /// 5-12 / 13-14 题 ANSWERING（两题共享）
     #[serde(default = "default_group_answer_ms")]
     pub group_answer_ms: u32,
+    /// 15-18 题前的开场介绍（INTRO），在 PREPARE 之前显示
+    #[serde(default = "default_retell_intro_ms")]
+    pub retell_intro_ms: u32,
     /// 15-19 题（听后转述）PREPARE
     #[serde(default = "default_retell_prepare_ms")]
     pub retell_prepare_ms: u32,
@@ -145,6 +214,12 @@ pub struct TimingConfig {
     /// 15-19 题 RECALL_PREP（默读准备）
     #[serde(default = "default_retell_recall_prep_ms")]
     pub retell_recall_prep_ms: u32,
+    /// 第 19 题前的介绍（INTRO），在 RECALL_PREP 之后、RECORDING 之前显示
+    #[serde(default = "default_retell_q19_intro_ms")]
+    pub retell_q19_intro_ms: u32,
+    /// 15-18 题 PLAYING #3 前的介绍（INTRO），在 FILL_BLANK 之后、第 3 次播放之前显示
+    #[serde(default = "default_retell_play3_intro_ms")]
+    pub retell_play3_intro_ms: u32,
 }
 
 fn default_intro_ms() -> u32 {
@@ -156,6 +231,9 @@ fn default_short_dialogue_prepare_ms() -> u32 {
 fn default_short_dialogue_answer_ms() -> u32 {
     10_000
 }
+fn default_group_intro_ms() -> u32 {
+    10_000
+}
 fn default_group_prepare_ms() -> u32 {
     10_000
 }
@@ -163,6 +241,9 @@ fn default_group_pause_ms() -> u32 {
     2_000
 }
 fn default_group_answer_ms() -> u32 {
+    10_000
+}
+fn default_retell_intro_ms() -> u32 {
     10_000
 }
 fn default_retell_prepare_ms() -> u32 {
@@ -177,6 +258,12 @@ fn default_retell_fill_blank_ms() -> u32 {
 fn default_retell_recall_prep_ms() -> u32 {
     120_000
 }
+fn default_retell_q19_intro_ms() -> u32 {
+    10_000
+}
+fn default_retell_play3_intro_ms() -> u32 {
+    10_000
+}
 
 impl Default for TimingConfig {
     fn default() -> Self {
@@ -184,13 +271,17 @@ impl Default for TimingConfig {
             intro_ms: default_intro_ms(),
             short_dialogue_prepare_ms: default_short_dialogue_prepare_ms(),
             short_dialogue_answer_ms: default_short_dialogue_answer_ms(),
+            group_intro_ms: default_group_intro_ms(),
             group_prepare_ms: default_group_prepare_ms(),
             group_pause_ms: default_group_pause_ms(),
             group_answer_ms: default_group_answer_ms(),
+            retell_intro_ms: default_retell_intro_ms(),
             retell_prepare_ms: default_retell_prepare_ms(),
             retell_pause_ms: default_retell_pause_ms(),
             retell_fill_blank_ms: default_retell_fill_blank_ms(),
             retell_recall_prep_ms: default_retell_recall_prep_ms(),
+            retell_q19_intro_ms: default_retell_q19_intro_ms(),
+            retell_play3_intro_ms: default_retell_play3_intro_ms(),
         }
     }
 }
@@ -205,6 +296,11 @@ pub struct AppConfig {
     pub prompts: PromptConfig,
     pub audio: AudioConfig,
     pub timing: TimingConfig,
+    /// 4 段开场介绍文案（1-4 / 5-14 / 15-18 / 19 题前）
+    ///
+    /// 缺字段时回退 `IntroConfig::default()`，旧配置文件无需迁移。
+    #[serde(default)]
+    pub intro: IntroConfig,
     /// 题目难度配置：当前选中档 + 三档 prompt 文字
     ///
     /// 缺字段时回退 `DifficultyConfig::default()`，旧配置文件无需迁移。
@@ -251,6 +347,7 @@ impl Default for AppConfig {
             prompts: default_prompts(),
             audio: AudioConfig::default(),
             timing: TimingConfig::default(),
+            intro: default_intro_texts(),
             difficulty: DifficultyConfig::default(),
         }
     }

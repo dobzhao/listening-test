@@ -205,6 +205,8 @@ pub fn run() {
             commands::config::reset_config,
             commands::config::restore_default_prompt,
             commands::config::restore_default_timing,
+            commands::config::restore_default_intro,
+            commands::config::restore_default_intro_all,
             commands::config::restore_default_difficulty_demand,
             commands::config::restore_default_difficulty_level,
             commands::config::restore_default_difficulty,

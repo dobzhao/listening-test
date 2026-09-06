@@ -6,6 +6,7 @@ import {
   ConfigResponse,
   DifficultyDemandKey,
   DifficultyLevel,
+  IntroKey,
   PromptKey,
   TimingConfig,
   defaultAppConfig,
@@ -17,6 +18,8 @@ import {
   restoreDefaultDifficulty,
   restoreDefaultDifficultyDemand,
   restoreDefaultDifficultyLevel,
+  restoreDefaultIntro,
+  restoreDefaultIntroAll,
   restoreDefaultPrompt,
   restoreDefaultTiming,
 } from "@/lib/tauri";
@@ -41,6 +44,10 @@ interface SettingsState {
   updatePrompt: (key: PromptKey, value: string) => void;
   restoreOnePrompt: (key: PromptKey) => Promise<void>;
   restoreDefaultTiming: () => Promise<void>;
+  // 开场介绍文案（命名对齐 `updatePrompt` / `restoreOnePrompt` 模式）
+  updateIntro: (key: IntroKey, value: string) => void;
+  restoreOneIntro: (key: IntroKey) => Promise<void>;
+  restoreDefaultIntro: () => Promise<void>;
   // 难度配置（命名对齐 `updatePrompt` / `restoreOnePrompt` 模式）
   setDifficultyLevel: (level: DifficultyLevel) => void;
   updateDifficultyDemand: (
@@ -121,6 +128,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   restoreDefaultTiming: async () => {
     const fresh = await restoreDefaultTiming();
     get().updateTiming(fresh);
+  },
+
+  updateIntro: (key, value) =>
+    set((s) => ({
+      config: { ...s.config, intro: { ...s.config.intro, [key]: value } },
+    })),
+
+  restoreOneIntro: async (key) => {
+    const value = await restoreDefaultIntro(key);
+    get().updateIntro(key, value);
+  },
+
+  restoreDefaultIntro: async () => {
+    const fresh = await restoreDefaultIntroAll();
+    set((s) => ({ config: { ...s.config, intro: fresh } }));
   },
 
   setDifficultyLevel: (level) =>

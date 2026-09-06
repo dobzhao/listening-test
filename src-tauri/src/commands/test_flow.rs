@@ -96,13 +96,13 @@ pub async fn start_test_flow(
         session.monologue.questions.len(),
     );
 
-    // 读取流程时长配置（用快照，不用读锁常驻）
-    let timing = {
+    // 读取流程时长与开场介绍文案（用快照，不用读锁常驻）
+    let (timing, intro) = {
         let guard = config_state
             .inner
             .read()
             .map_err(|e| format!("配置锁读取失败: {e}"))?;
-        guard.timing.clone()
+        (guard.timing.clone(), guard.intro.clone())
     };
 
     debug!(
@@ -110,7 +110,7 @@ pub async fn start_test_flow(
         timing
     );
 
-    spawn_test_flow(app, flow.container.clone(), session, timing);
+    spawn_test_flow(app, flow.container.clone(), session, timing, intro);
     info!("start_test_flow: 已 spawn 测试流程异步任务");
     Ok(StartFlowResponse { ok: true })
 }

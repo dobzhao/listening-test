@@ -80,7 +80,7 @@ export function FillBlankTable({ table, enabled }: Props) {
         <p className="text-xs text-muted-foreground mt-3">
           {enabled
             ? "请使用键盘在空格中输入答案，限时 90 秒"
-            : "音频播放中，挖空将在第三轮播放结束后统一可见"}
+            : ""}
         </p>
       </CardContent>
     </Card>

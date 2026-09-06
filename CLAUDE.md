@@ -80,7 +80,7 @@ peiyuan/
 ├── src/                              # 前端 React + TS
 │   ├── components/
 │   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）+ ConfirmDialog
-│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / LlmParamsPanel / TimingPanel / DifficultyPanel（含自适应开关 / 重置 / 只读读数，v1.1+ 见 §4.4.8）
+│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / LlmParamsPanel / TimingPanel / IntroPanel（5 段开场介绍文案，v1.2+ 见 §4.4.15）/ DifficultyPanel（含自适应开关 / 重置 / 只读读数，v1.1+ 见 §4.4.8）
 │   │   ├── test/                     # GlobalHeader / PhaseCountdown / QuestionDisplay / FillBlankTable / RecorderPanel
 │   │   ├── ErrorBoundary.tsx
 │   │   └── Toast.tsx
@@ -96,7 +96,7 @@ peiyuan/
 │   ├── src/
 │   │   ├── commands/                  # Tauri commands
 │   │   │   ├── app_close.rs           # 关窗拦截：confirm_close_app / cancel_close_app（Rust 驱动，见 §4.4.14）
-│   │   │   ├── config.rs              # get_config / save_config / reset_config / restore_default_prompt / restore_default_timing / open_config_dir
+│   │   │   ├── config.rs              # get_config / save_config / reset_config / restore_default_prompt / restore_default_timing / restore_default_intro(_all) / open_config_dir
 │   │   │   ├── llm.rs                 # test_llm_connection / generate_with_llm
 │   │   │   ├── tts.rs                 # test_tts_connection
 │   │   │   ├── stt.rs                 # test_stt_connection / transcribe_audio
@@ -124,7 +124,7 @@ peiyuan/
 │   │   │   ├── timer.rs               # 精确计时 + 事件推送
 │   │   │   └── tts_service.rs
 │   │   ├── models/                    # 数据结构
-│   │   │   ├── config.rs              # AppConfig / ModelConfig / LlmParams / PromptConfig / AudioConfig / TimingConfig（见 §4.4.8）
+│   │   │   ├── config.rs              # AppConfig / ModelConfig / LlmParams / PromptConfig / AudioConfig / TimingConfig（见 §4.4.8）/ IntroConfig（见 §4.4.15）
 │   │   │   ├── question.rs            # ShortDialogue / LongDialogue / Monologue / RetellMaterial / TestSession
 │   │   │   └── result.rs              # McqResult / BlankResult / RetellResult / TestResult / AdaptiveSummary（v1.1+，详见 §4.4.8）
 │   │   ├── utils/
@@ -195,7 +195,7 @@ peiyuan/
 | `test-generation-progress` | `{stage, message, progress}` | 题目预生成各阶段 |
 | `test-timer-tick` | `{phase, elapsedMs, durationMs, remainingMs, progress}` | 每 100ms |
 | `test-phase-finished` | `phase` | 阶段倒计时结束 |
-| `test-flow-state` | `FlowState`（含 `play_count: Option<u32>`，15-19 题 PLAYING 时取 1/2/3） | 阶段切换 |
+| `test-flow-state` | `FlowState`（含 `play_count: Option<u32>`，15-19 题 PLAYING 时取 1/2/3；含 `intro_text: Option<String>`，仅 5 个 INTRO 阶段为 Some，见 §4.4.15） | 阶段切换 |
 | `test-flow-finished` | `{ok, completed?, error?}` | 1-19 题全部完成 |
 | `test-audio-play` | `{path, loop}` | 通知前端播放（实际播放由后端 rodio 完成）。**两次 PLAYING 之间的静音间隔会以 `{ path: null }` 发射一次**，前端需据此重置进度 |
 | `test-record-start` | `{durationMs}` | 进入 19 题录音阶段 |
@@ -348,6 +348,45 @@ Tauri 2 的 `tauri-2.11.5/src/manager/window.rs:170` 在收到 `CloseRequested` 
 
 **`capabilities/default.json` 不变**：本方案不依赖任何 window 变更或 dialog ACL。
 
+#### 4.4.15 五段开场介绍（v1.2+，2026-09 新增 play3）
+
+**需求**：除原有第 1 题前的开场介绍外，5-14 题前、15-18 题前、15-18 题 PLAYING #3 前、
+19 题录音前各增加一段介绍，纯文字 + 倒计时（不合成 / 不播放语音），文案与时长均可在设置界面编辑。
+
+**共用 `Phase::Intro`**：没有新增 Phase 变体，也没有改 TS 的 `TestPhase` 联合类型与
+`PHASE_LABELS`。五段介绍靠 `FlowState.question_index` 区分：
+
+| question_index | 插入位置 | 时长字段 | 文案字段 |
+|---|---|---|---|
+| 1 | `run_short_dialogue` 内 `qnum == 1` | `timing.intro_ms` | `intro.text_1_4` |
+| 5 | `run_flow` 中长对话循环之前 | `timing.group_intro_ms` | `intro.text_5_14` |
+| 15 | `run_retell` 的 PREPARE 之前 | `timing.retell_intro_ms` | `intro.text_15_18` |
+| 15 | `run_retell` 的 FILL_BLANK 之后、PLAYING #3 之前（play3 helper） | `timing.retell_play3_intro_ms` | `intro.text_15_18_play3` |
+| 19 | `finish_recording_phases` 中 RECALL_PREP 之后 | `timing.retell_q19_intro_ms` | `intro.text_19` |
+
+**文案由后端下发**：`FlowState` 新增 `intro_text: Option<String>`（camelCase `introText`），
+仅 INTRO 阶段为 `Some`。前端 `Test.tsx` 直接渲染 `introText`，不再维护「阶段 → 文案」映射，
+因此不存在前后端映射漂移；`get_flow_state` 的快照重放同样带着文案。
+
+**共享 helper** `services/test_flow.rs::run_intro(...)`：
+- `duration_ms == 0` 或文案 `trim()` 为空 → 整段跳过（用户可用「时长设 0」关掉某个介绍）
+- 进入与退出都 `skip_flag.store(false)`；skip 语义仅「提前结束本介绍」，
+  不中止本题、不跳到 PLAYING #3（前端在 intro 阶段隐藏「下一题」，故实际不可达，属防御性兜底）
+- play3 介绍被抽成 `run_play3_intro(...)` helper，因为 `run_retell` 内有 6 处需要调用
+  （5 个 escape 分支 + 1 个 fall-through），靠 helper 避免重复
+
+**⚠️ 19 题介绍必须排在 `RECORD_START_EVENT` 之前**：`test-record-start` 是前端
+`useRecorder` 真正开始采集麦克风的唯一触发源。若在介绍前发射，介绍还在显示时就已开始录音，
+且 90 秒录音预算会被介绍时长吃掉。
+
+**配置**：
+- `AppConfig.intro`（`IntroConfig`，`#[serde(default)]`）5 个 String 字段，默认文案硬编码在
+  `models/config.rs::default_intro_texts()`（与前端 `defaultIntroConfig()` 一字一致，同 difficulty 惯例）
+- `TimingConfig` 新增 `group_intro_ms` / `retell_intro_ms` / `retell_play3_intro_ms` /
+  `retell_q19_intro_ms`（各默认 10s）
+- commands：`restore_default_intro`（单段）/ `restore_default_intro_all`（全部），对齐 `restore_default_prompt`
+- UI：「设置 → 开场介绍」Tab（`IntroPanel`）编辑文案；时长仍在「流程时长」Tab（`TimingPanel`，共 14 项）
+
 ### 4.5 模块分层
 
 ```
@@ -366,19 +405,21 @@ Utils (utils/*.rs)                    ← 通用工具：JSON 解析、重试、
 
 ```
 1-4 题：INTRO(intro_ms) → PREPARE(short_dialogue_prepare_ms) → PLAYING(1x) → ANSWERING(short_dialogue_answer_ms) → 下一题
+5-14 题开场介绍：INTRO(group_intro_ms) —— 仅第 5 题前一次，由 run_flow 在长对话循环前调用
 5-12 题（4 段共享一个 ANSWERING 时段）：PREPARE(group_prepare_ms) → PLAYING #1 → 间隔(group_pause_ms) → PLAYING #2 → ANSWERING(共享 group_answer_ms)
 13-14 题（独白）：PREPARE(group_prepare_ms) → PLAYING(1x) → ANSWERING(group_answer_ms)
 15-19 题：
-  PREPARE(retell_prepare_ms) → PLAYING #1 → 间隔(retell_pause_ms) → PLAYING #2 →
-  FILL_BLANK(retell_fill_blank_ms) → PLAYING #3 → RECALL_PREP(retell_recall_prep_ms) →
-  RECORDING(固定 90s) → DONE
+  INTRO(retell_intro_ms) → PREPARE(retell_prepare_ms) → PLAYING #1 → 间隔(retell_pause_ms) → PLAYING #2 →
+  FILL_BLANK(retell_fill_blank_ms) → INTRO(retell_play3_intro_ms) → PLAYING #3 →
+  RECALL_PREP(retell_recall_prep_ms) → INTRO(retell_q19_intro_ms) → RECORDING(固定 90s) → DONE
 ```
 
 关键约定：
 - **所有时长（除 RECORDING 固定 90s 外）均由 `TimingConfig` 控制**，详见 §4.4.8
+- **5 个 INTRO 阶段共用 `Phase::Intro`**（1-4 / 5-14 / 15-18 / 15-18 PLAYING #3 前 / 19 题前），靠 `question_index`（1 / 5 / 15 / 15 / 19）区分；文案取自 `AppConfig.intro`（`IntroConfig`）并随 `FlowState.intro_text` 下发，前端不维护「阶段 → 文案」映射。详见 §4.4.15
 - 15-19 题 PLAYING 阶段在 `test-flow-state` 事件中带 `play_count: Some(1|2|3)` 字段；前端在 `play_count = Some(3)` 时必须禁用填空白编辑
 - `skip_to_next` 可用阶段：PREPARE / PLAYING #1 / pause / PLAYING #2 / FILL_BLANK（直接跳到 PLAYING #3）
-- `skip_to_next` **不可用**阶段：PLAYING #3 / RECALL_PREP / RECORDING（保证最后两段答题时间不被压缩）
+- `skip_to_next` **不可用**阶段：PLAYING #3 / RECALL_PREP / RECORDING（保证最后两段答题时间不被压缩）；INTRO 阶段前端隐藏「下一题」按钮，`run_intro` 内即使收到信号也只是提前结束介绍本身
 - `notify_recording_completed` 可在 RECORDING 任意时刻触发，提前结束录音
 - 所有跨阶段睡眠均走 `interruptible_sleep()`，每 100ms 轮询对应信号位（详见 §4.4.9 / §4.4.11）
 
@@ -451,7 +492,8 @@ npm run tauri:build -- --target x86_64-unknown-linux-gnu # Linux
 - 19 道题分两段：1-14 选择 / 15-19 转述
 - 全部使用本地/自建 OpenAI 兼容模型服务
 - 5 个 Prompt 模板可在 UI 编辑 + 恢复默认（`PromptEditor`）
-- 阶段时长可在 UI 编辑 + 恢复默认（`TimingPanel`，对应 `TimingConfig`，详见 §4.4.8）
+- 阶段时长可在 UI 编辑 + 恢复默认（`TimingPanel`，对应 `TimingConfig`，共 13 项，详见 §4.4.8）
+- 5 段开场介绍（1-4 / 5-14 / 15-18 / 15-18 PLAYING #3 前 / 19 题前）纯文字 + 倒计时，文案可在 UI 编辑 + 恢复默认（`IntroPanel`，对应 `IntroConfig`，详见 §4.4.15）
 - 后端驱动计时与音频播放
 - 15-18 题评分：每空 LLM JSON 评分（0 或 1.5 分），详见 §4.4.12
 - 总分 30（14 + 6 + 10），自动评分

@@ -32,6 +32,25 @@ export interface AudioConfig {
 }
 
 /**
+ * 5 段开场介绍文案（纯文字，随 INTRO 阶段展示，不合成语音）。
+ * 与 Rust `models::config::IntroConfig` 字段一一对应。
+ */
+export interface IntroConfig {
+  /** 第 1 题前（1-4 题短对话部分） */
+  text_1_4: string;
+  /** 第 5 题前（5-14 题长对话 + 独白部分） */
+  text_5_14: string;
+  /** 第 15 题前（15-18 题听后转述填空部分） */
+  text_15_18: string;
+  /** 15-18 题 PLAYING #3 前（FILL_BLANK 之后、第 3 次播放之前） */
+  text_15_18_play3: string;
+  /** 第 19 题录音前（默读准备之后） */
+  text_19: string;
+}
+
+export type IntroKey = keyof IntroConfig;
+
+/**
  * 测试流程各阶段时长（毫秒）。
  * 与 Rust `models::config::TimingConfig` 字段一一对应。
  * RECORDING 时长不在此配置，由后端固定为 90 秒。
@@ -40,13 +59,17 @@ export interface TimingConfig {
   intro_ms: number;
   short_dialogue_prepare_ms: number;
   short_dialogue_answer_ms: number;
+  group_intro_ms: number;
   group_prepare_ms: number;
   group_pause_ms: number;
   group_answer_ms: number;
+  retell_intro_ms: number;
   retell_prepare_ms: number;
   retell_pause_ms: number;
   retell_fill_blank_ms: number;
   retell_recall_prep_ms: number;
+  retell_q19_intro_ms: number;
+  retell_play3_intro_ms: number;
 }
 
 /**
@@ -165,6 +188,7 @@ export interface AppConfig {
   prompts: PromptConfig;
   audio: AudioConfig;
   timing: TimingConfig;
+  intro: IntroConfig;
   difficulty: DifficultyConfig;
 }
 
@@ -267,15 +291,36 @@ export function defaultAppConfig(): AppConfig {
       intro_ms: 10000,
       short_dialogue_prepare_ms: 5000,
       short_dialogue_answer_ms: 10000,
+      group_intro_ms: 10000,
       group_prepare_ms: 10000,
       group_pause_ms: 2000,
       group_answer_ms: 10000,
+      retell_intro_ms: 10000,
       retell_prepare_ms: 30000,
       retell_pause_ms: 3000,
       retell_fill_blank_ms: 90000,
       retell_recall_prep_ms: 120000,
+      retell_q19_intro_ms: 10000,
+      retell_play3_intro_ms: 10000,
     },
+    intro: defaultIntroConfig(),
     difficulty: defaultDifficultyConfig(),
+  };
+}
+
+/**
+ * 5 段开场介绍默认文案（与 Rust `models::config::default_intro_texts()` 一字一致）。
+ */
+export function defaultIntroConfig(): IntroConfig {
+  return {
+    text_1_4:
+      "听下面四段对话，每段对话后有一道小题，从每题所给的A、B、C三个选项中选出最佳选项，并用鼠标点击该选项。听对话前，你将有时间阅读每小题。听完后，每小题将有作答时间，每段对话你将听一遍。",
+    text_5_14:
+      "听下面五段对话或独白，每段对话或独白后有两道小题，从每题所给的A、B、C三个选项中选出最佳选项，并用鼠标点击该选项。听每段对话或独白前，你将有时间阅读每小题。听完后，每小题将有作答时间。每段对话或独白你将听两遍。",
+    text_15_18:
+      "听两遍短文，根据所听内容和提示，将所缺的关键信息填写在相应位置上，每空只需填写一个词。",
+    text_15_18_play3: "现在，请开始做转述准备。",
+    text_19: "下面，请准备录音。倒计时结束后，在90秒内完成转述。",
   };
 }
 

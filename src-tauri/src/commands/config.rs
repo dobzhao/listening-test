@@ -1,8 +1,8 @@
 //! 配置读写相关 Tauri commands
 
 use crate::models::config::{
-    default_difficulty_demands, default_prompts, AppConfig, DifficultyConfig, DifficultyDemand,
-    TimingConfig,
+    default_difficulty_demands, default_intro_texts, default_prompts, AppConfig, DifficultyConfig,
+    DifficultyDemand, IntroConfig, TimingConfig,
 };
 use crate::utils::path::{atomic_write_json, config_file};
 use serde::{Deserialize, Serialize};
@@ -142,10 +142,38 @@ pub fn restore_default_prompt(args: RestorePromptArgs) -> Result<String, String>
     }
 }
 
-/// 恢复流程时长为默认值（一次性还原全部 10 个阶段时长）
+/// 恢复流程时长为默认值（一次性还原全部 14 个阶段时长）
 #[tauri::command]
 pub fn restore_default_timing() -> Result<TimingConfig, String> {
     Ok(TimingConfig::default())
+}
+
+// ===== 开场介绍文案（intro）相关 =====
+
+/// 单段介绍文案恢复默认（细粒度，对齐 `restore_default_prompt` 的形态）
+#[derive(Debug, Deserialize)]
+pub struct RestoreIntroArgs {
+    /// "text_1_4" | "text_5_14" | "text_15_18" | "text_15_18_play3" | "text_19"
+    pub key: String,
+}
+
+#[tauri::command]
+pub fn restore_default_intro(args: RestoreIntroArgs) -> Result<String, String> {
+    let defaults = default_intro_texts();
+    match args.key.as_str() {
+        "text_1_4" => Ok(defaults.text_1_4),
+        "text_5_14" => Ok(defaults.text_5_14),
+        "text_15_18" => Ok(defaults.text_15_18),
+        "text_15_18_play3" => Ok(defaults.text_15_18_play3),
+        "text_19" => Ok(defaults.text_19),
+        other => Err(format!("未知介绍文案 key: {other}")),
+    }
+}
+
+/// 恢复全部 5 段介绍文案
+#[tauri::command]
+pub fn restore_default_intro_all() -> Result<IntroConfig, String> {
+    Ok(IntroConfig::default())
 }
 
 // ===== 难度（difficulty）相关 =====

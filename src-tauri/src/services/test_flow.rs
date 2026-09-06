@@ -2,9 +2,14 @@
 //!
 //! 流程：
 //! - 1-4 题（每题独立，4 段短对话）：INTRO(10s, 仅第 1 次) → PREPARE(5s) → PLAYING(1次) → ANSWERING(10s) → 下一题
+//! - 5-14 题开场介绍：INTRO(10s, 仅第 5 题前 1 次)
 //! - 5-12 题（4 段长对话，每段配 2 题）：PREPARE(10s) → PLAYING(2次间隔2s) → ANSWERING(10s) → 下一段
 //! - 13-14 题（独白）：PREPARE(10s) → PLAYING(1次) → ANSWERING(10s) → 下一段
-//! - 15-19 题：PREPARE(30s) → PLAYING(2次间隔3s) → FILL_BLANK(90s) → PLAYING(1次) → RECALL_PREP(120s) → RECORDING(90s)
+//! - 15-19 题：INTRO(10s) → PREPARE(30s) → PLAYING(2次间隔3s) → FILL_BLANK(90s) → PLAYING(1次)
+//!   → RECALL_PREP(120s) → INTRO(10s, 19 题录音前) → RECORDING(90s)
+//!
+//! 4 个 INTRO 阶段共用 `Phase::Intro`，靠 `question_index`（1 / 5 / 15 / 19）区分，
+//! 文案取自 `IntroConfig` 并随 `FlowState.intro_text` 下发（详见 `run_intro`）。
 //!
 //! 计时统一由 `timer::PhaseTimer` 驱动，前端订阅 tick/phase-finished 事件。
 //! 音频由后端 rodio 直接播放（避免 webview autoplay 限制与 asset protocol 跨平台问题），
@@ -13,7 +18,7 @@
 //! 用户作答由前端通过 `submit_answer` command 提交，存于 FlowStateContainer 中。
 
 use crate::commands::audio::AudioPlaybackState;
-use crate::models::config::TimingConfig;
+use crate::models::config::{IntroConfig, TimingConfig};
 use crate::models::question::TestSession;
 use crate::services::audio_player::play_wav_blocking;
 use crate::services::timer::{Phase, PhaseTimer};
@@ -53,6 +58,10 @@ pub struct FlowState {
     /// 仅 15-19 题的 PLAYING #1/#2/#3 阶段分别填 Some(1/2/3)）。
     /// 前端据此在 PLAYING #3 阶段禁用填空编辑（Spec §3.4）。
     pub play_count: Option<u32>,
+    /// 开场介绍文案（仅 intro 阶段为 Some，其余阶段为 None）。
+    /// 由后端从 `IntroConfig` 取出后下发，前端直接渲染，
+    /// 避免前端再维护一份「阶段 → 文案」映射。
+    pub intro_text: Option<String>,
 }
 
 /// 全部作答结果（1-14）
@@ -190,13 +199,14 @@ pub fn init_container_from_session(container: &FlowStateContainer, session: &Tes
 
 /// 启动 1-14 题完整测试流程（异步任务）
 ///
-/// `timing` 在调用前由 `start_test_flow` 从 `ConfigState` 读取后传入，
-/// 之后所有阶段时长都从此读取（不读盘、不读全局状态）。
+/// `timing` / `intro` 在调用前由 `start_test_flow` 从 `ConfigState` 读取后传入，
+/// 之后所有阶段时长与介绍文案都从此读取（不读盘、不读全局状态）。
 pub fn spawn_test_flow(
     app: AppHandle,
     container: FlowStateContainer,
     session: TestSession,
     timing: TimingConfig,
+    intro: IntroConfig,
 ) {
     info!(
         "spawn_test_flow: 初始化 FlowStateContainer session_id={}",
@@ -204,6 +214,7 @@ pub fn spawn_test_flow(
     );
     init_container_from_session(&container, &session);
     let timing = Arc::new(timing);
+    let intro = Arc::new(intro);
     // 重置 skip_requested / recording_completed 标志，
     // 避免上一轮残留下一次进入流程时被识别成跳过/录音完成
     container.reset_recording_completed();
@@ -212,7 +223,8 @@ pub fn spawn_test_flow(
     // 闭包运行过程中仍然需要 container 来 emit flow_finished 和更新 finished。
     let container_for_task = container.clone();
     let handle = tokio::spawn(async move {
-        let result = run_flow(app.clone(), container_for_task.clone(), session, timing).await;
+        let result =
+            run_flow(app.clone(), container_for_task.clone(), session, timing, intro).await;
         match result {
             Ok(()) => {
                 info!("测试流程完成");
@@ -244,6 +256,7 @@ async fn run_flow(
     container: FlowStateContainer,
     session: TestSession,
     timing: Arc<TimingConfig>,
+    intro: Arc<IntroConfig>,
 ) -> Result<(), String> {
     // ===== 1-4 题 =====
     info!(
@@ -252,7 +265,27 @@ async fn run_flow(
     );
     for (idx, d) in session.short_dialogues.iter().enumerate() {
         let qnum = idx as u32 + 1;
-        run_short_dialogue(&app, &container, d, qnum, timing.clone()).await?;
+        run_short_dialogue(&app, &container, d, qnum, timing.clone(), intro.clone()).await?;
+    }
+
+    // ===== 5-14 题开场介绍（整段只显示一次） =====
+    // 放在这里而不是 run_group_dialogue 内部加 `if first == 5`：
+    // run_group_dialogue 同时服务 5-12 题与 13-14 题，不该关心自己是不是第一组。
+    {
+        let skip_flag = skip_flag_clone(&container);
+        run_intro(
+            &app,
+            &container,
+            IntroSegment {
+                question_index: 5,
+                is_group: true,
+                progress: 4.0 / 19.0,
+                text: &intro.text_5_14,
+                duration_ms: timing.group_intro_ms,
+            },
+            &skip_flag,
+        )
+        .await;
     }
 
     // ===== 5-12 题（4 段长对话，每段配 2 题） =====
@@ -265,7 +298,7 @@ async fn run_flow(
     run_group_dialogue(&app, &container, [13, 14], "m", 1, timing.clone()).await?;
 
     // ===== 15-19 题（听后转述） =====
-    run_retell(&app, &container, &session.retell, timing.clone()).await?;
+    run_retell(&app, &container, &session.retell, timing.clone(), intro.clone()).await?;
 
     {
         let mut guard = container.inner.lock().unwrap();
@@ -282,6 +315,7 @@ async fn run_short_dialogue(
     d: &crate::models::question::ShortDialogue,
     qnum: u32,
     timing: Arc<TimingConfig>,
+    intro: Arc<IntroConfig>,
 ) -> Result<(), String> {
     let qid = d.question.id;
     let audio_path = {
@@ -293,23 +327,21 @@ async fn run_short_dialogue(
     // 进入新段前清空 skip 标志（避免上题残留）
     skip_flag.store(false, Ordering::Relaxed);
 
-    // 第一次进 1-4 题时显示开场介绍（时长从 timing 读取）
+    // 第一次进 1-4 题时显示开场介绍（时长与文案都从配置读取）
     if qnum == 1 {
-        let intro_ms = timing.intro_ms;
-        emit_state(app, container, FlowState {
-            question_index: qnum,
-            phase: Phase::Intro,
-            progress: 0.0,
-            audio_path: None,
-            is_group: false,
-            question_in_group: 0,
-            play_count: None,
-        });
-        let _timer = PhaseTimer::start(app.clone(), Phase::Intro, intro_ms as u64, 100);
-        interruptible_sleep(Duration::from_millis(intro_ms as u64 + 500), &skip_flag).await;
-        if skip_flag.load(Ordering::Relaxed) {
-            return Ok(());
-        }
+        run_intro(
+            app,
+            container,
+            IntroSegment {
+                question_index: qnum,
+                is_group: false,
+                progress: 0.0,
+                text: &intro.text_1_4,
+                duration_ms: timing.intro_ms,
+            },
+            &skip_flag,
+        )
+        .await;
     }
 
     // PREPARE
@@ -322,6 +354,7 @@ async fn run_short_dialogue(
         is_group: false,
         question_in_group: 0,
             play_count: None,
+            intro_text: None,
     });
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
     interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
@@ -338,6 +371,7 @@ async fn run_short_dialogue(
         is_group: false,
         question_in_group: 0,
             play_count: None,
+            intro_text: None,
     });
     // 用真实音频时长驱动进度条；若读不到则 fallback 2 秒。
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
@@ -360,6 +394,7 @@ async fn run_short_dialogue(
         is_group: false,
         question_in_group: 0,
             play_count: None,
+            intro_text: None,
     });
     let _timer = PhaseTimer::start(app.clone(), Phase::Answering, answer_ms as u64, 100);
     interruptible_sleep(Duration::from_millis(answer_ms as u64 + 500), &skip_flag).await;
@@ -399,6 +434,7 @@ async fn run_group_dialogue(
             is_group: true,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
@@ -419,6 +455,7 @@ async fn run_group_dialogue(
             is_group: true,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
@@ -453,6 +490,7 @@ async fn run_group_dialogue(
             is_group: true,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
@@ -475,6 +513,7 @@ async fn run_group_dialogue(
             is_group: true,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Answering, answer_ms as u64, 100);
@@ -482,6 +521,98 @@ async fn run_group_dialogue(
 
     info!(qnums = ?qnums, "组题流程完成");
     Ok(())
+}
+
+/// 一段开场介绍的描述（`run_intro` 的入参，避免一长串位置参数）
+struct IntroSegment<'a> {
+    /// 该介绍归属的题号：1 / 5 / 15 / 19（前端据此定位所处部分）
+    question_index: u32,
+    /// 是否属于材料组（5-14 / 15-18 为 true，1-4 与 19 为 false）
+    is_group: bool,
+    /// 1-19 题总进度（与相邻阶段取值保持一致）
+    progress: f32,
+    /// 介绍文案（取自 `IntroConfig`）
+    text: &'a str,
+    /// 介绍时长（取自 `TimingConfig`；0 表示跳过）
+    duration_ms: u32,
+}
+
+/// 15-18 题 PLAYING #3 之前的开场介绍（第 5 段 INTRO）。
+///
+/// 插在 FILL_BLANK 之后、PLAYING #3 之前，从属 15-18 题流程。
+/// `run_retell` 内 6 个跳转点（5 个 escape 分支 + 1 个 fall-through）
+/// 都需要在进入 PLAYING #3 之前先调一次，因此抽成 helper 避免重复。
+///
+/// `run_intro` 内部对 `duration_ms == 0 || text.trim().is_empty()`
+/// 已做早返回，时长 0 / 文案清空即等同"关闭此介绍"，无需调用方额外判断。
+async fn run_play3_intro(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    timing: &TimingConfig,
+    intro: &IntroConfig,
+    skip_flag: &Arc<AtomicBool>,
+) {
+    let base_progress = 14.0 / 19.0;
+    run_intro(
+        app,
+        container,
+        IntroSegment {
+            question_index: 15,
+            is_group: true,
+            progress: base_progress + 0.35,
+            text: &intro.text_15_18_play3,
+            duration_ms: timing.retell_play3_intro_ms,
+        },
+        skip_flag,
+    )
+    .await;
+    skip_flag.store(false, Ordering::Relaxed);
+}
+
+/// 纯文字开场介绍（4 处复用：1-4 / 5-14 / 15-18 / 19 题前）
+///
+/// emit 一次 INTRO 状态 + 起一个倒计时，**不播放任何音频**。
+/// 文案由调用方从 `IntroConfig` 取出后传入，随 `FlowState.intro_text` 下发给前端。
+///
+/// - 时长为 0 或文案为空 → 整段跳过（给用户一个「关掉某个介绍」的开关）
+/// - skip 语义：仅提前结束本介绍（进入与退出都清零 skip_flag），
+///   不中止本题、也不跳到 PLAYING #3。前端在 intro 阶段隐藏「下一题」按钮，
+///   因此这里只是防御性兜底（避免上一阶段残留的信号位把介绍瞬间冲掉）。
+async fn run_intro(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    seg: IntroSegment<'_>,
+    skip_flag: &Arc<AtomicBool>,
+) {
+    let IntroSegment {
+        question_index,
+        is_group,
+        progress,
+        text,
+        duration_ms,
+    } = seg;
+    if duration_ms == 0 || text.trim().is_empty() {
+        info!(question_index, "开场介绍已跳过（时长为 0 或文案为空）");
+        return;
+    }
+    skip_flag.store(false, Ordering::Relaxed);
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index,
+            phase: Phase::Intro,
+            progress,
+            audio_path: None,
+            is_group,
+            question_in_group: 0,
+            play_count: None,
+            intro_text: Some(text.to_string()),
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::Intro, duration_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(duration_ms as u64 + 500), skip_flag).await;
+    skip_flag.store(false, Ordering::Relaxed);
 }
 
 fn emit_state(app: &AppHandle, container: &FlowStateContainer, state: FlowState) {
@@ -600,6 +731,7 @@ async fn run_retell(
     container: &FlowStateContainer,
     _retell: &crate::models::question::RetellMaterial,
     timing: Arc<TimingConfig>,
+    intro: Arc<IntroConfig>,
 ) -> Result<(), String> {
     let audio_path = {
         let guard = container.inner.lock().unwrap();
@@ -609,6 +741,21 @@ async fn run_retell(
     skip_flag.store(false, Ordering::Relaxed);
 
     let base_progress = 14.0 / 19.0; // 14 题已完成
+
+    // 0. 15-18 题开场介绍（在 PREPARE 之前）
+    run_intro(
+        app,
+        container,
+        IntroSegment {
+            question_index: 15,
+            is_group: true,
+            progress: base_progress,
+            text: &intro.text_15_18,
+            duration_ms: timing.retell_intro_ms,
+        },
+        &skip_flag,
+    )
+    .await;
 
     // 1. PREPARE — 可跳过
     // 注意：每个阶段的计时器必须限定在自己的 { ... } block 内，
@@ -626,6 +773,7 @@ async fn run_retell(
             is_group: true,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let prepare_skipped = {
@@ -636,8 +784,11 @@ async fn run_retell(
     if prepare_skipped {
         // 跳到 PLAYING #3 之前先清零，让 PLAYING #3 顺利完成
         skip_flag.store(false, Ordering::Relaxed);
+        // FILL_BLANK 之后的第 5 段开场介绍（15-18 题 PLAYING #3 前），
+        // 时长 0 或文案空时 run_intro 内部直接跳过
+        run_play3_intro(app, container, &timing, &intro, &skip_flag).await;
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container, timing.clone()).await;
+        finish_recording_phases(app, container, timing.clone(), intro.clone()).await;
         return Ok(());
     }
 
@@ -653,6 +804,7 @@ async fn run_retell(
             is_group: true,
             question_in_group: 0,
             play_count: Some(1),
+            intro_text: None,
         },
     );
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
@@ -664,8 +816,11 @@ async fn run_retell(
     }; // _timer 在此 drop
     if playing1_skipped {
         skip_flag.store(false, Ordering::Relaxed);
+        // FILL_BLANK 之后的第 5 段开场介绍（15-18 题 PLAYING #3 前），
+        // 时长 0 或文案空时 run_intro 内部直接跳过
+        run_play3_intro(app, container, &timing, &intro, &skip_flag).await;
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container, timing.clone()).await;
+        finish_recording_phases(app, container, timing.clone(), intro.clone()).await;
         return Ok(());
     }
 
@@ -681,8 +836,11 @@ async fn run_retell(
     };
     if pause_skipped {
         skip_flag.store(false, Ordering::Relaxed);
+        // FILL_BLANK 之后的第 5 段开场介绍（15-18 题 PLAYING #3 前），
+        // 时长 0 或文案空时 run_intro 内部直接跳过
+        run_play3_intro(app, container, &timing, &intro, &skip_flag).await;
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container, timing.clone()).await;
+        finish_recording_phases(app, container, timing.clone(), intro.clone()).await;
         return Ok(());
     }
 
@@ -698,6 +856,7 @@ async fn run_retell(
             is_group: true,
             question_in_group: 0,
             play_count: Some(2),
+            intro_text: None,
         },
     );
     let playing2_skipped = {
@@ -708,8 +867,11 @@ async fn run_retell(
     }; // _timer 在此 drop
     if playing2_skipped {
         skip_flag.store(false, Ordering::Relaxed);
+        // FILL_BLANK 之后的第 5 段开场介绍（15-18 题 PLAYING #3 前），
+        // 时长 0 或文案空时 run_intro 内部直接跳过
+        run_play3_intro(app, container, &timing, &intro, &skip_flag).await;
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container, timing.clone()).await;
+        finish_recording_phases(app, container, timing.clone(), intro.clone()).await;
         return Ok(());
     }
 
@@ -726,6 +888,7 @@ async fn run_retell(
             is_group: true,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let fill_blank_skipped = {
@@ -735,15 +898,21 @@ async fn run_retell(
     }; // _timer 在此 drop，FILL_BLANK 计时器在进入 PLAYING #3 之前已停止
     if fill_blank_skipped {
         skip_flag.store(false, Ordering::Relaxed);
+        // FILL_BLANK 之后的第 5 段开场介绍（15-18 题 PLAYING #3 前），
+        // 时长 0 或文案空时 run_intro 内部直接跳过
+        run_play3_intro(app, container, &timing, &intro, &skip_flag).await;
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container, timing.clone()).await;
+        finish_recording_phases(app, container, timing.clone(), intro.clone()).await;
         return Ok(());
     }
 
     // 4-6 阶段按正常顺序跑完（不允许再跳过）
     skip_flag.store(false, Ordering::Relaxed);
+    // FILL_BLANK 之后的第 5 段开场介绍（15-18 题 PLAYING #3 前），
+    // 时长 0 或文案空时 run_intro 内部直接跳过
+    run_play3_intro(app, container, &timing, &intro, &skip_flag).await;
     goto_playing_3(app, container, audio_path.as_ref()).await;
-    finish_recording_phases(app, container, timing.clone()).await;
+    finish_recording_phases(app, container, timing.clone(), intro.clone()).await;
     Ok(())
 }
 
@@ -765,6 +934,7 @@ async fn goto_playing_3(
             is_group: true,
             question_in_group: 0,
             play_count: Some(3),
+            intro_text: None,
         },
     );
     let play_ms = compute_play_ms(audio_path, 2_000);
@@ -774,7 +944,7 @@ async fn goto_playing_3(
     sleep(Duration::from_millis(500)).await;
 }
 
-/// 15-19 题第 5-6 步：RECALL_PREP + RECORDING
+/// 15-19 题第 5-6 步：RECALL_PREP + 19 题介绍 + RECORDING
 ///
 /// RECORDING 时长固定 90 秒（不受 TimingConfig 控制）：
 /// Spec 十三节明确约束，录音时长受 STT/LLM 判分稳定性限制。
@@ -782,6 +952,7 @@ async fn finish_recording_phases(
     app: &AppHandle,
     container: &FlowStateContainer,
     timing: Arc<TimingConfig>,
+    intro: Arc<IntroConfig>,
 ) {
     let base_progress = 14.0 / 19.0;
     // 5. RECALL_PREP
@@ -797,10 +968,33 @@ async fn finish_recording_phases(
             is_group: false,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::RecallPrep, recall_ms as u64, 100);
     sleep(Duration::from_millis(recall_ms as u64 + 500)).await;
+
+    // 5.5 第 19 题介绍（默读准备之后、录音之前）
+    //
+    // ⚠️ 必须排在下面的 RECORD_START_EVENT 之前：该事件是前端 useRecorder
+    // 真正开始采集麦克风的唯一触发源，提前发射会让介绍还在显示时就开始录音，
+    // 90 秒录音预算也会被介绍时长吃掉。
+    {
+        let skip_flag = skip_flag_clone(container);
+        run_intro(
+            app,
+            container,
+            IntroSegment {
+                question_index: 19,
+                is_group: false,
+                progress: base_progress + 0.8,
+                text: &intro.text_19,
+                duration_ms: timing.retell_q19_intro_ms,
+            },
+            &skip_flag,
+        )
+        .await;
+    }
 
     // 6. RECORDING（固定 90 秒，不读取 TimingConfig）
     // 可被"提前结束录音"中断（前端调用 notify_recording_completed 命令）
@@ -822,6 +1016,7 @@ async fn finish_recording_phases(
             is_group: false,
             question_in_group: 0,
             play_count: None,
+            intro_text: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Recording, recording_ms, 100);
